@@ -1,0 +1,3149 @@
+---
+title: "pulmonic_stenosis_data_simulation"
+author: "Alex German"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Check working directory
+```{r}
+getwd()
+```
+
+
+
+# Load packages
+```{r, warning = F, message = F}
+
+library(readxl)
+library(psych)
+library(dlookr)
+library(vtable)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(reshape)
+library(vioplot)
+
+library(tidyverse)
+library(pammtools)
+library(splines2)
+library(posterior)
+library(ggplot2)
+library(rethinking)
+library(survminer)
+library(survival)
+library(cowplot)
+library(rstanarm)
+library(bayestestR)
+library(brms)
+library(tidybayes)
+library(bayesplot)
+library(simsurv)
+library(sn)
+```
+
+
+
+# 1. Create synthetic dataset 1 for testing
+Simple associations but no interactions
+## a. Define covariates
+```{r}
+# Define number of individuals
+n_subjects <- 200
+
+# Simulate covariates: e.g., a binary treatment variable (trt) and age
+set.seed(123)
+covariates <- data.frame(
+  id = 1:n_subjects,
+  surgery = rbinom(n_subjects, 1, 0.6), # 60% chance of surgery
+  chf = rbinom(n_subjects, 1, 0.2), # 20% chance of chf
+  s_age = rsn(n = n_subjects, xi = 0, omega = 1, alpha = 4)   # Standardised age in months as skew-normal distribution
+)
+
+```
+
+
+## b. Generate true survival times
+```{r}
+# Define the true parameter values (log hazard ratios for covariates)
+# The 'names' correspond to column names in the 'covariates' data frame
+betas <- c(surgery = -0.5, s_age = 0.03, chf = 2.0)
+
+# Define the shape (gamma) and scale (lambda) parameters for the baseline Weibull distribution
+# Note: 'simsurv' uses 'gammas' for shape and 'lambdas' for scale
+# Setting gamma=1 results in an exponential distribution
+gammas <- c(shape = 0.75)
+lambdas <- c(scale = 0.01)
+
+
+# Simulate event times
+set.seed(123)
+true_event_times <- simsurv(
+  dist = "weibull",
+  x = covariates,
+  betas = betas,
+  gammas = gammas,
+  lambdas = lambdas
+)
+
+# Combine with covariates for a complete dataset
+sim_data <- merge(covariates, true_event_times, by = "id")
+sim_data <- sim_data |>
+  mutate(centre = sample(x = LETTERS[1:3], size = n_subjects, replace=TRUE))
+```
+
+
+
+## c. Incorporate censoring
+```{r}
+# Define a maximum follow-up time (e.g., 5 years)
+max_follow_up <- 3000
+
+# Simulate a random censoring time (e.g., uniform distribution up to max_follow_up)
+# The actual censoring time could also be dependent on other factors
+set.seed(123)
+sim_data$censor_time <- runif(n_subjects, 0, max_follow_up)
+
+# Determine observed time and event status
+sim_data$time <- pmin(sim_data$eventtime, sim_data$censor_time)
+sim_data$status <- as.numeric(sim_data$eventtime <= sim_data$censor_time) # 1 = event, 0 = censored
+```
+
+
+
+## d. Generate data summary of synthetic data 1
+```{r}
+sumtable(sim_data)
+```
+
+
+
+
+
+# 2. Create synthetic dataset 2 for testing
+
+Simple associations with interaction of chf on clinical_signs
+## a. Define covariates
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Define number of individuals
+n_subjects <- 250
+
+prob_impact <- 0.75 # Probability of 'impacted' being 1 when 'influencer' is 1
+prob_no_impact <- 0.25 # Base probability of 'impacted' being 1 when 'influencer' is 0
+
+
+# Create the Influencing Variable (chf)
+# Simulate a binary variable (0 or 1)
+chf = rbinom(n_subjects, 1, 0.5) # 50% chance of chf
+
+
+# Create the Impacted Variable (clinical_signs) ---
+# Use case_when to create Y based on X, with controlled probabilities
+clinical_signs <- case_when(
+  chf == 1 ~ rbinom(n_subjects, 1, prob_impact), # If influencer is 1, Y has high chance (75%) of being 1
+  chf == 0 ~ rbinom(n_subjects, 1, prob_no_impact) # If influencer is 0, Y has low chance (25%) of being 1
+)
+
+
+# Simulate covariates: e.g., a binary treatment variable (trt) and age
+
+covariates2 <- data.frame(
+  id = 1:n_subjects,
+  chf = chf,
+  clinical_signs = clinical_signs
+)
+
+```
+
+
+## b. Generate true survival times
+```{r}
+# Define the true parameter values (log hazard ratios for covariates)
+# The 'names' correspond to column names in the 'covariates' data frame
+betas2 <- c(clinical_signs = 0, chf = 0.75)
+
+# Define the shape (gamma) and scale (lambda) parameters for the baseline Weibull distribution
+# Note: 'simsurv' uses 'gammas' for shape and 'lambdas' for scale
+# Setting gamma=1 results in an exponential distribution
+gammas <- c(shape = 0.4)
+lambdas <- c(scale = 0.01)
+
+
+# Simulate event times
+set.seed(123)
+true_event_times2 <- simsurv(
+  dist = "weibull",
+  x = covariates2,
+  betas = betas2,
+  gammas = gammas,
+  lambdas = lambdas
+)
+
+# Combine with covariates2 for a complete dataset
+sim_data2 <- merge(covariates2, true_event_times2, by = "id")
+sim_data2 <- sim_data2 |>
+  mutate(centre = sample(x = LETTERS[1:3], size = n_subjects, replace=TRUE))
+```
+
+
+
+## c. Incorporate censoring
+```{r}
+# Define a maximum follow-up time (e.g., 5 years)
+max_follow_up <- 3000
+
+# Simulate a random censoring time (e.g., uniform distribution up to max_follow_up)
+# The actual censoring time could also be dependent on other factors
+set.seed(123)
+sim_data2$censor_time <- runif(n_subjects, 0, max_follow_up)
+
+# Determine observed time and event status
+sim_data2$time <- pmin(sim_data2$eventtime, sim_data2$censor_time)
+sim_data2$status <- as.numeric(sim_data2$eventtime <= sim_data2$censor_time) # 1 = event, 0 = censored
+```
+
+
+
+## d. Generate data summary of synthetic data 2
+```{r}
+sumtable(sim_data2)
+```
+
+
+
+
+
+
+# 3. Create synthetic dataset 3 for testing
+Again, interaction between chf and clinical_signs, with an additional effect of clinical_signs
+## a. Define covariates
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Define number of individuals
+n_subjects <- 250
+
+prob_impact <- 0.75 # Probability of 'impacted' being 1 when 'influencer' is 1
+prob_no_impact <- 0.25 # Base probability of 'impacted' being 1 when 'influencer' is 0
+
+
+# Create the Influencing Variable (chf)
+# Simulate a binary variable (0 or 1)
+chf = rbinom(n_subjects, 1, 0.5) # 50% chance of chf
+
+
+# Create the Impacted Variable (clinical_signs) ---
+# Use case_when to create Y based on X, with controlled probabilities
+clinical_signs <- case_when(
+  chf == 1 ~ rbinom(n_subjects, 1, prob_impact), # If influencer is 1, Y has high chance (75%) of being 1
+  chf == 0 ~ rbinom(n_subjects, 1, prob_no_impact) # If influencer is 0, Y has low chance (25%) of being 1
+)
+
+
+# Simulate covariates: e.g., a binary treatment variable (trt) and age
+
+covariates3 <- data.frame(
+  id = 1:n_subjects,
+  chf = chf,
+  clinical_signs = clinical_signs
+)
+
+```
+
+
+
+## b. Generate true survival times
+```{r}
+# Define the true parameter values (log hazard ratios for covariates)
+# The 'names' correspond to column names in the 'covariates' data frame
+betas3 <- c(clinical_signs = 0.5, chf = 0.5)
+
+# Define the shape (gamma) and scale (lambda) parameters for the baseline Weibull distribution
+# Note: 'simsurv' uses 'gammas' for shape and 'lambdas' for scale
+# Setting gamma=1 results in an exponential distribution
+gammas <- c(shape = 0.4)
+lambdas <- c(scale = 0.01)
+
+
+# Simulate event times
+set.seed(123)
+true_event_times2 <- simsurv(
+  dist = "weibull",
+  x = covariates3,
+  betas = betas3,
+  gammas = gammas,
+  lambdas = lambdas
+)
+
+# Combine with covariates2 for a complete dataset
+sim_data3 <- merge(covariates3, true_event_times2, by = "id")
+sim_data3 <- sim_data3 |>
+  mutate(centre = sample(x = LETTERS[1:3], size = n_subjects, replace=TRUE))
+```
+
+
+
+## c. Incorporate censoring
+```{r}
+# Define a maximum follow-up time (e.g., 5 years)
+max_follow_up <- 3000
+
+# Simulate a random censoring time (e.g., uniform distribution up to max_follow_up)
+# The actual censoring time could also be dependent on other factors
+set.seed(123)
+sim_data3$censor_time <- runif(n_subjects, 0, max_follow_up)
+
+# Determine observed time and event status
+sim_data3$time <- pmin(sim_data3$eventtime, sim_data3$censor_time)
+sim_data3$status <- as.numeric(sim_data3$eventtime <= sim_data3$censor_time) # 1 = event, 0 = censored
+```
+
+
+
+## d. Generate data summary of synthetic data 3
+```{r}
+sumtable(sim_data3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 3. Check effects in dataset 1
+# I.  Bayesian Cox's regression for EFFECT OF SURGERY (surgery y/n) with random intercept for centre
+
+## Informative prior for surgery
+### i. surgery
+Set a non_informative weakly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2)
+
+
+```{r}
+prior_surgery <- student_t(df = 3, 
+                           location = 0,
+                           scale = 2,
+                           autoscale = FALSE)
+```
+
+
+ 
+
+## Fit model with for surgery
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_sx <- stan_surv(formula = Surv(time, status) ~ 1 + surgery +  (1| centre),
+  data = sim_data,
+  basehaz = "ms",
+  prior = prior_surgery,
+  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_sx)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_sx)
+```
+
+
+
+## Model short summary
+```{r}
+print(mod_sx, digits = 3)
+```
+
+
+
+
+##  Plot Baseline hazard of model
+```{r}
+plot(mod_sx)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_sx <- as.array(mod_sx)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_sx)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_sx)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_sx)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_sx)
+median(draws[,2]) # 2nd column is draws for surgery
+HPDI(draws[,2], 0.97) # 2nd column is draws for surgery
+HPDI(draws[,2], 0.89) # 2nd column is draws for surgery
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### surgery
+probability that effect is negative
+```{r}
+mean(draws[,2] < 0) # 2nd column is draws for surgery
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_sx, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "surgery")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_sx,
+  pars = c("surgery"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_sx,
+  pars = "surgery")
+```
+
+
+
+## Calculate hazard ratios for surgery
+### a. get posterior draws
+```{r}
+surgery_hr <- exp(draws[,2]) # 2nd column is draws for surgery)
+```
+
+
+
+### b. Summarise hazard ratios for surgery
+```{r}
+median(surgery_hr)
+hdi_surgery_hr <- hdi(surgery_hr, ci = c(0.50, 0.68, 0.89, 0.97))
+hdi_surgery_hr
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of surgery
+```{r}
+ggplot(data.frame(surgery_hr), aes(x = surgery_hr)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for surgery",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_sx) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_sx, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for surgery
+### create new data where age differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 surgery = c(0, 1)
+                 )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_sx,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No surgery", '2' = "Surgery performed")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.95, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_sx, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_sx, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + surgery, data = sim_data)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Surgery",
+    fill = "Surgery",
+    title = "Kaplan–Meier curves stratified by surgery"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of surgery
+```{r}
+# Fit Cox PH model
+freq_cox_sx <- coxph(Surv(time, status) ~ 1 + surgery + strata(centre),
+  data = sim_data)
+
+summary(freq_cox_sx)
+```
+
+
+
+
+
+
+
+
+
+
+## II.  Bayesian Cox's regression for EFFECT of s_age with random intercept for centre
+
+## Non-informative prior for s_age
+Set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2)
+ 
+
+```{r}
+prior_s_age <- student_t(df = 3, 
+                           location = 0,
+                           scale = 2,
+                           autoscale = FALSE)
+```
+
+
+ 
+
+## Fit model
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_s_age <- stan_surv(formula = Surv(time, status) ~ 1 + s_age +  (1| centre),
+  data = sim_data,
+  basehaz = "ms",
+  prior = prior_s_age,
+  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_s_age)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_s_age)
+```
+
+
+
+## Model short summary
+```{r}
+print(mod_s_age, digits = 3)
+```
+
+
+
+
+##  Plot Baseline hazard of model
+```{r}
+plot(mod_s_age)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_s_age <- as.array(mod_s_age)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_s_age)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_s_age)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_s_age)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_s_age)
+median(draws[,2]) # 2nd column is draws for s_age
+HPDI(draws[,2], 0.97) # 2nd column is draws for s_age
+HPDI(draws[,2], 0.89) # 2nd column is draws for s_age
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### surgery
+probability that effect is negative
+```{r}
+mean(draws[,2] < 0) # 2nd column is draws for surgery
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_s_age, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "s_age")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_s_age,
+  pars = c("s_age"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_s_age,
+  pars = "s_age")
+```
+
+
+
+## Calculate hazard ratios for s_urgery_age
+### a. get posterior draws
+```{r}
+s_age_hr <- exp(draws[,2]) # 2nd column is draws for s_age)
+```
+
+
+
+### b. Summarise hazard ratios for surgery
+```{r}
+median(s_age_hr)
+hdi_s_age_hr <- hdi(s_age_hr, ci = c(0.50, 0.68, 0.89, 0.97))
+hdi_s_age_hr
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of s_age
+```{r}
+ggplot(data.frame(s_age_hr), aes(x = s_age_hr)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for s_age",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_sx) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_sx, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for s_age
+### create new data where age differs
+```{r}
+nd <- data.frame(centre = rep("A", 5),
+                 s_age = c(-2, -1, 0, 1, 2)
+                )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_s_age,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "-2 Sd", '2' = "-1 Sd", '3' = "Mean", '4' = "+1 Sd", '5' = "+2 Sd")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.95, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_s_age, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_s_age, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+
+
+## Fit frequentist Cox PH model for effect of s_age
+```{r}
+# Fit Cox PH model
+freq_cox_s_age <- coxph(Surv(time, status) ~ 1 + s_age + strata(centre),
+  data = sim_data)
+
+summary(freq_cox_s_age)
+```
+
+
+
+
+
+
+## III.  Bayesian Cox's regression for EFFECT OF chf with random intercept for centre
+
+## Non-informative prior for chf
+Set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2)
+ 
+
+```{r}
+prior_chf <- student_t(df = 3, 
+                           location = 0,
+                           scale = 2,
+                           autoscale = FALSE)
+```
+
+
+ 
+
+## Fit model with for surgery 
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_chf <- stan_surv(formula = Surv(time, status) ~ 1 + chf +  (1| centre),
+  data = sim_data,
+  basehaz = "ms",
+  prior = prior_chf,
+  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_chf)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_chf)
+```
+
+
+
+## Model short summary
+```{r}
+print(mod_chf, digits = 3)
+```
+
+
+
+
+##  Plot Baseline hazard of model
+```{r}
+plot(mod_chf)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_chf <- as.array(mod_chf)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_chf)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_chf)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_chf)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_chf)
+median(draws[,2]) # 2nd column is draws for chf
+HPDI(draws[,2], 0.97) # 2nd column is draws for chf
+HPDI(draws[,2], 0.89) # 2nd column is draws for chf
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### surgery
+probability that effect is negative
+```{r}
+mean(draws[,2] < 0) # 2nd column is draws for surgery
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_chf, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "chf")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_chf,
+  pars = c("chf"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_chf,
+  pars = "chf")
+```
+
+
+
+## Calculate hazard ratios for s_age
+### a. get posterior draws
+```{r}
+chf_hr <- exp(draws[,2]) # 2nd column is draws for chf)
+```
+
+
+
+### b. Summarise hazard ratios for surgery
+```{r}
+median(chf_hr)
+hdi_chf_hr <- hdi(chf_hr, ci = c(0.50, 0.68, 0.89, 0.97))
+hdi_chf_hr
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of chf
+```{r}
+ggplot(data.frame(chf_hr), aes(x = chf_hr)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for chf",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_sx) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_sx, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for chf
+### create new data where age differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 chf = c(0, 1)
+                )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_chf,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No CHF", '2' = "CHF")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.95, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_chf, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_chf, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + chf, data = sim_data)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Surgery",
+    fill = "Surgery",
+    title = "Kaplan–Meier curves stratified by surgery"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of chf
+```{r}
+# Fit Cox PH model
+freq_cox_chf <- coxph(Surv(time, status) ~ 1 + chf + strata(centre),
+  data = sim_data)
+
+summary(freq_cox_chf)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 4. Check effects in dataset 2
+# I.  Bayesian Cox's regression for effect of RIGHT CHF with random intercept for centre
+
+
+## Informative prior for chf
+
+### i.chf
+As chf is associated with a HR of 4.8
+Set a non-informative weakly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2)
+
+
+
+```{r}
+prior_chf2 <- student_t(df = 3,
+                       location = 0,
+                       scale = 2,
+                       autoscale = TRUE)
+```
+
+
+
+## Fit model
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_chf2 <- stan_surv(formula = Surv(time, status) ~ 1 + chf + (1| centre),
+  data = sim_data2,
+  basehaz = "ms",
+  prior = prior_chf2,
+  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_chf2)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_chf2)
+```
+
+
+
+## Model short summary
+```{r}
+print(mod_chf2, digits = 3)
+```
+
+
+
+## Plot Baseline hazard of model
+```{r}
+plot(mod_chf2)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_chf2 <- as.array(mod_chf2)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_chf2)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_chf2)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_chf2)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_chf2)
+median(draws[,2]) # 2nd column is draws for chf
+HPDI(draws[,2], 0.97) # 2nd column is draws for chf
+HPDI(draws[,2], 0.89) # 2nd column is draws for chf
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### chf
+probability that effect is positive
+```{r}
+mean(draws[,2] > 0) # 2nd column is draws for chf
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_chf2, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "chf")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_chf2,
+  pars = c("chf"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_chf2,
+  pars = "chf")
+```
+
+
+
+## Calculate hazard ratios for chf
+### a. get posterior draws
+```{r}
+chf_hr2 <- exp(draws[,2]) # 2nd column is draws for chf)
+```
+
+
+
+### b. Summarise hazard ratios for chf
+```{r}
+median(chf_hr2)
+hdi_chf_hr2 <- hdi(chf_hr2, ci = c(0.97))
+hdi_chf_hr2
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of chf
+```{r}
+ggplot(data.frame(chf_hr2), aes(x = chf_hr2)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for congestive heart failure",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_chf2) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_chf2, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for chf
+### create new data where chf differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 chf = c(0, 1)
+                 )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_chf2,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No congestive heart failure", '2' = "Congestive heart failure present")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.90, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_chf2, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_chf2, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  coord_cartesian(ylim = c(0.0, 0.005)) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve for right chf
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + chf, data = sim_data2)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Right CHF",
+    fill = "Right CHF",
+    title = "Kaplan–Meier curves stratified by right-sided congestive heart failure"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of right CHF
+```{r}
+# Fit Cox PH model
+freq_cox_chf2 <- coxph(Surv(time, status) ~ 1 + chf + strata(centre),
+                data = sim_data2)
+
+summary(freq_cox_chf2)
+```
+
+
+
+
+
+
+
+
+
+## II.  Bayesian Cox's regression for BIASED effect of CLINICAL SIGNS with random intercept for centre
+
+
+## Non-informative prior for clinical_signs
+
+
+```{r}
+prior_clin_si <- student_t(df = 3,
+                           location = 0,
+                           scale = 2,
+                           autoscale = FALSE)
+```
+
+
+
+## Fit model
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_clin_si_bias <- stan_surv(formula = Surv(time, status) ~ 1 + clinical_signs + (1| centre),
+  data = sim_data2,
+  basehaz = "ms",
+  prior = prior_clin_si,
+  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_clin_si_bias)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_clin_si_bias)
+```
+
+
+
+## Model short summary
+```{r}
+print(mod_clin_si_bias, digits = 3)
+```
+
+
+
+## Plot Baseline hazard of model
+```{r}
+plot(mod_clin_si_bias)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_clin_si_bias <- as.array(mod_clin_si_bias)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_clin_si_bias)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_clin_si_bias)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_clin_si_bias)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_clin_si_bias)
+median(draws[,2]) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.97) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.89) # 2nd column is draws for clinical_signs
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### clinical_signs
+probability that effect is positive
+```{r}
+mean(draws[,2] > 0) # 2nd column is draws for clinical_signs
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_clin_si_bias, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "clinical_signs")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_clin_si_bias,
+  pars = c("clinical_signs"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_clin_si_bias,
+  pars = "clinical_signs")
+```
+
+
+
+## Calculate hazard ratios for clinical_signs
+### a. get posterior draws
+```{r}
+clinical_signs_hr <- exp(draws[,2]) # 2nd column is draws for clinical_signs)
+```
+
+
+
+### b. Summarise hazard ratios for clinical_signs
+```{r}
+median(clinical_signs_hr)
+hdi_clinical_signs_hr <- hdi(clinical_signs_hr, ci = c(0.97))
+hdi_clinical_signs_hr
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of clinical_signs
+```{r}
+ggplot(data.frame(clinical_signs_hr), aes(x = clinical_signs_hr)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for clinical signs",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_clin_si_bias) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_clin_si_bias, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for clinical_signs
+### create new data where clinical_signs differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 clinical_signs = c(0, 1)
+                 )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_clin_si_bias,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No clinical signs", '2' = "Clinical signs present")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.90, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_clin_si_bias, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_clin_si_bias, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  coord_cartesian(ylim = c(0.0, 0.005)) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve for right clinical_signs
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + clinical_signs, data = sim_data2)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Clinical signs",
+    fill = "Clinical signs",
+    title = "Kaplan–Meier curves stratified by clinical signs"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of right clinical_signs
+```{r}
+# Fit Cox PH model
+freq_cox_clinical_signs <- coxph(Surv(time, status) ~ 1 + clinical_signs + strata(centre),
+                data = sim_data2)
+
+summary(freq_cox_clinical_signs)
+```
+
+
+
+
+
+
+
+# III.  Bayesian Cox's regression for TRUE effect of CLINICAL SIGNS with random intercept for centre
+Here, we adjust for the effect of CHF by stratifying on that variable
+
+## Non-informative prior for clinical_signs
+
+
+
+```{r}
+prior_clin_si <- student_t(df = 3,
+                           location = 0,
+                           scale = 2,
+                           autoscale = FALSE)
+```
+
+
+
+
+
+## Fit model
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_clin_si_true <- stan_surv(formula = Surv(time, status) ~ 1 + clinical_signs + chf + (1| centre),
+  data = sim_data2,
+  basehaz = "ms",
+  prior = prior_clin_si,
+  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_clin_si_true)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_clin_si_true)
+```
+
+
+
+## Model short summary
+```{r}
+print(mod_clin_si_true, digits = 3)
+```
+
+
+
+## Plot Baseline hazard of model
+```{r}
+plot(mod_clin_si_true)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_clin_si_true <- as.array(mod_clin_si_true)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_clin_si_true)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_clin_si_true)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_clin_si_true)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_clin_si_true)
+median(draws[,2]) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.97) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.89) # 2nd column is draws for clinical_signs
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### clinical_signs
+probability that effect is positive
+```{r}
+mean(draws[,2] > 0) # 2nd column is draws for clinical_signs
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_clin_si_true, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "clinical_signs")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_clin_si_true,
+  pars = c("clinical_signs"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_clin_si_true,
+  pars = "clinical_signs")
+```
+
+
+
+## Calculate hazard ratios for clinical_signs
+### a. get posterior draws
+```{r}
+clinical_signs_hr <- exp(draws[,2]) # 2nd column is draws for clinical_signs)
+```
+
+
+
+### b. Summarise hazard ratios for clinical_signs
+```{r}
+median(clinical_signs_hr)
+hdi_clinical_signs_hr <- hdi(clinical_signs_hr, ci = c(0.97))
+hdi_clinical_signs_hr
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of clinical_signs
+```{r}
+ggplot(data.frame(clinical_signs_hr), aes(x = clinical_signs_hr)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for clinical signs",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_clin_si_true) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_clin_si_true, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for clinical_signs
+### create new data where clinical_signs differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 clinical_signs = c(0, 1),
+                 chf = rep(0, 2)
+                 )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_clin_si_true,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No clinical signs", '2' = "Clinical signs present")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.90, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_clin_si_true, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_clin_si_true, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  coord_cartesian(ylim = c(0.0, 0.005)) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve for right clinical_signs
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + clinical_signs, data = sim_data2)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Clinical signs",
+    fill = "Clinical signs",
+    title = "Kaplan–Meier curves stratified by clinical signs"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of right clinical_signs
+```{r}
+# Fit Cox PH model
+freq_cox_clinical_signs <- coxph(Surv(time, status) ~ 1 + clinical_signs + chf + strata(centre),
+                data = sim_data2)
+
+summary(freq_cox_clinical_signs)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 5. Check effects in dataset 3
+# I.  Bayesian Cox's regression for TOTAL effect of RIGHT CHF with random intercept for centre
+NB effect of chf amplified because additional effect of clinical signs
+
+## Non-informative prior for chf
+
+### i.chf
+
+
+
+```{r}
+prior_chf3 <- student_t(df = 3,
+                       location = 0,
+                       scale = 2,
+                       autoscale = TRUE)
+```
+
+
+
+## Fit model
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_chf3 <- stan_surv(formula = Surv(time, status) ~ 1 + chf + (1| centre),
+  data = sim_data3,
+  basehaz = "ms",
+  prior = prior_chf3,
+  prior_intercept = normal(location = 0, scale = 10, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_chf3)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_chf3)
+```
+NOTE: beta coefficient estimate = 0. because effect amplified by clinical_signs effect
+
+
+## Model short summary
+```{r}
+print(mod_chf3, digits = 3)
+```
+
+
+
+## Plot Baseline hazard of model
+```{r}
+plot(mod_chf3)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_chf3 <- as.array(mod_chf3)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_chf3)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_chf3)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_chf3)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_chf3)
+median(draws[,2]) # 2nd column is draws for chf
+HPDI(draws[,2], 0.97) # 2nd column is draws for chf
+HPDI(draws[,2], 0.89) # 2nd column is draws for chf
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### chf
+probability that effect is positive
+```{r}
+mean(draws[,2] > 0) # 2nd column is draws for chf
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_chf3, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "chf")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_chf3,
+  pars = c("chf"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_chf3,
+  pars = "chf")
+```
+
+
+
+## Calculate hazard ratios for chf
+### a. get posterior draws
+```{r}
+chf_hr3 <- exp(draws[,2]) # 2nd column is draws for chf)
+```
+
+
+
+### b. Summarise hazard ratios for chf
+```{r}
+median(chf_hr3)
+hdi_chf_hr3 <- hdi(chf_hr3, ci = c(0.97))
+hdi_chf_hr3
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of chf
+```{r}
+ggplot(data.frame(chf_hr3), aes(x = chf_hr3)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for congestive heart failure",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_chf3) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_chf3, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for chf
+### create new data where chf differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 chf = c(0, 1)
+                 )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_chf3,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No congestive heart failure", '2' = "Congestive heart failure present")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.90, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_chf3, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_chf3, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  coord_cartesian(ylim = c(0.0, 0.005)) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve for right chf
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + chf, data = sim_data3)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Right CHF",
+    fill = "Right CHF",
+    title = "Kaplan–Meier curves stratified by right-sided congestive heart failure"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of right CHF
+```{r}
+# Fit Cox PH model
+freq_cox_chf3 <- coxph(Surv(time, status) ~ 1 + chf + strata(centre),
+                data = sim_data3)
+
+summary(freq_cox_chf3)
+```
+
+
+
+
+
+
+
+
+
+
+
+# II.  Bayesian Cox's regression for DIRECT effect of RIGHT CHF with random intercept for centre
+#     Also shows true effect of clinical signs
+NB Now adjusted for clinical signs effect
+
+## Non-informative prior for chf
+
+### i.chf
+
+
+
+
+
+
+
+# II.  Bayesian Cox's regression for BIASED effect of CLINICAL SIGNS with random intercept for centre
+
+
+## Non-informative prior for clinical_signs
+
+
+
+```{r}
+prior_clin_si <- student_t(df = 3,
+                           location = 0,
+                           scale = 2,
+                           autoscale = TRUE)
+```
+
+
+
+## Fit model
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_clin_si_bias3 <- stan_surv(formula = Surv(time, status) ~ 1 + clinical_signs + (1| centre),
+  data = sim_data3,
+  basehaz = "ms",
+  prior = prior_clin_si,
+  prior_intercept = normal(location = 0, scale = 10, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_clin_si_bias3)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_clin_si_bias3)
+```
+NOTE: estimate of beta coefficient is 0.8 ... not 0.5 because of biased effect from chf
+
+
+## Model short summary
+```{r}
+print(mod_clin_si_bias3, digits = 3)
+```
+
+
+
+## Plot Baseline hazard of model
+```{r}
+plot(mod_clin_si_bias3)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_clin_si_bias3 <- as.array(mod_clin_si_bias3)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_clin_si_bias3)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_clin_si_bias3)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_clin_si_bias3)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+```{r}
+draws <- as.matrix(mod_clin_si_bias3)
+median(draws[,2]) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.97) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.89) # 2nd column is draws for clinical_signs
+```
+
+
+
+### Hypothesis tests on beta parameters
+#### clinical_signs
+probability that effect is positive
+```{r}
+mean(draws[,2] > 0) # 2nd column is draws for clinical_signs
+```
+
+
+
+### a. Get HDI for coefficients
+```{r}
+hdi <- bayestestR::hdi(mod_clin_si_bias3, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "clinical_signs")
+plot(hdi)
+```
+
+
+
+## Get density plots for posterior distributons of beta parameters
+```{r}
+mcmc_dens(posterior_mod_clin_si_bias3,
+  pars = c("clinical_signs"))
+```
+
+
+
+## Get area plot for posterior distributons of beta parameters
+```{r}
+mcmc_areas(posterior_mod_clin_si_bias3,
+  pars = "clinical_signs")
+```
+
+
+
+## Calculate hazard ratios for clinical_signs
+### a. get posterior draws
+```{r}
+clinical_signs_hr3 <- exp(draws[,2]) # 2nd column is draws for clinical_signs)
+```
+
+
+
+### b. Summarise hazard ratios for clinical_signs
+```{r}
+median(clinical_signs_hr3)
+hdi_clinical_signs_hr3 <- hdi(clinical_signs_hr3, ci = c(0.97))
+hdi_clinical_signs_hr3
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of clinical_signs
+```{r}
+ggplot(data.frame(clinical_signs_hr3), aes(x = clinical_signs_hr3)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for clinical signs",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_clin_si_bias3) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_clin_si_bias3, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for clinical_signs
+### create new data where clinical_signs differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 clinical_signs = c(0, 1)
+                 )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_clin_si_bias3,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No clinical signs", '2' = "Clinical signs present")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.90, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_clin_si_bias3, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_clin_si_bias3, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  coord_cartesian(ylim = c(0.0, 0.005)) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve for right clinical_signs
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + clinical_signs, data = sim_data3)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Clinical signs",
+    fill = "Clinical signs",
+    title = "Kaplan–Meier curves stratified by clinical signs"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of right clinical_signs
+```{r}
+# Fit Cox PH model
+freq_cox_clinical_signs3 <- coxph(Surv(time, status) ~ 1 + clinical_signs + strata(centre),
+                data = sim_data3)
+
+summary(freq_cox_clinical_signs3)
+```
+
+
+
+
+
+
+
+
+
+
+# III.  Bayesian Cox's regression for TRUE effect of CLINICAL SIGNS with random intercept for centre
+#      AND also for the DIRECT EFFECT of CHF
+Here, we adjust for the effect of CHF by stratifying on that variable
+
+## Non-informative prior for clinical_signs
+
+
+
+
+```{r}
+prior_clin_si_chf <- student_t(df = 3,
+                           location = 0,
+                           scale = 2,
+                           autoscale = FALSE)
+```
+
+
+
+
+
+## Fit model
+NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
+```{r}
+mod_clin_si_true3 <- stan_surv(formula = Surv(time, status) ~ 1 + clinical_signs + chf + (1| centre),
+  data = sim_data3,
+  basehaz = "ms",
+  prior = prior_clin_si_chf,
+  prior_intercept = normal(location = 0, scale = 10, autoscale = FALSE),
+  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
+  iter    = 2000,
+  chains = 4,
+  cores = 4,
+  adapt_delta = 0.999,  # Often helpful for complex models
+  seed = 666)
+```
+
+
+## Summarise priors from model
+```{r}
+prior_summary(mod_clin_si_true3)
+```
+
+
+
+## Model summary
+```{r}
+summary(mod_clin_si_true3)
+```
+
+NOTE estimates for clinical signs and chf are now correct (~0.5) based on what was included in the synthetic dataset
+
+
+
+
+## Model short summary
+```{r}
+print(mod_clin_si_true3, digits = 3)
+```
+
+
+
+## Plot Baseline hazard of model
+```{r}
+plot(mod_clin_si_true3)
+```
+
+
+
+## Plots of model convergences
+
+## Get results
+```{r}
+posterior_mod_clin_si_true3 <- as.array(mod_clin_si_true3)
+```
+
+
+
+### a. Check trace plots for model
+```{r}
+color_scheme_set("mix-blue-pink")
+mcmc_trace(posterior_mod_clin_si_true3)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+mcmc_rank_overlay(posterior_mod_clin_si_true3)
+```
+
+
+
+### c. get dens overlay plot for chains
+```{r}
+color_scheme_set("blue")
+mcmc_dens_overlay(posterior_mod_clin_si_true3)
+```
+
+
+
+## Summaries of coefficients
+
+### HPDI for the different beta parameters
+#### clinical signs
+```{r}
+draws <- as.matrix(mod_clin_si_true3)
+median(draws[,2]) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.97) # 2nd column is draws for clinical_signs
+HPDI(draws[,2], 0.89) # 2nd column is draws for clinical_signs
+```
+
+
+
+#### chf
+```{r}
+draws <- as.matrix(mod_clin_si_true3)
+median(draws[,3]) # 2nd column is draws for chf
+HPDI(draws[,3], 0.97) 
+HPDI(draws[,3], 0.89) 
+```
+
+
+
+
+
+### Hypothesis tests on beta parameters
+#### clinical_signs
+probability that effect is positive
+```{r}
+mean(draws[,2] > 0) # 2nd column is draws for clinical_signs
+```
+
+
+#### chf
+probability that effect is positive
+```{r}
+mean(draws[,3] > 0) # 2nd column is draws for chf
+```
+
+
+
+
+### a. Get HDI for coefficients
+#### i. clinical signs
+```{r}
+hdi <- bayestestR::hdi(mod_clin_si_true3, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "clinical_signs")
+plot(hdi)
+```
+
+
+#### ii. chf
+```{r}
+hdi <- bayestestR::hdi(mod_clin_si_true3, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "chf")
+plot(hdi)
+```
+
+
+
+
+## Calculate hazard ratios for clinical_signs
+### a. get posterior draws
+```{r}
+clinical_signs_hr3 <- exp(draws[,2]) # 2nd column is draws for clinical_signs)
+```
+
+
+
+### b. Summarise hazard ratios for clinical_signs
+```{r}
+median(clinical_signs_hr3)
+hdi_clinical_signs_hr3 <- hdi(clinical_signs_hr3, ci = c(0.97))
+hdi_clinical_signs_hr3
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of clinical_signs
+```{r}
+ggplot(data.frame(clinical_signs_hr3), aes(x = clinical_signs_hr3)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for clinical signs",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+## Calculate hazard ratios for chf
+### a. get posterior draws
+```{r}
+chf_hr3 <- exp(draws[,3]) # 2nd column is draws for chf
+```
+
+
+
+### b. Summarise hazard ratios for chf
+```{r}
+median(chf_hr3)
+hdi_chf_hr3 <- hdi(chf_hr3, ci = c(0.97))
+hdi_chf_hr3
+```
+
+
+
+### c. Plot posterior distribution for hazard ratio of chf
+```{r}
+ggplot(data.frame(chf_hr3), aes(x = chf_hr3)) +
+  geom_density(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Posterior distribution of hazard ratio for CHF",
+       x = "Hazard Ratio",
+       y = "Density") +
+  theme_bw() +
+  geom_vline(xintercept = 1, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+
+
+
+
+
+
+## Check model performance
+### check performance of posterior probability
+NB equivalent of pp_check
+```{r}
+ps_check(mod_clin_si_true3) |>
+  suppressWarnings()
+```
+
+
+
+### check performance of prior probability
+```{r}
+mod_final_prior_only <- update(mod_clin_si_true3, prior_PD = TRUE)
+ps_check(mod_final_prior_only) |>
+  suppressWarnings()
+```
+
+
+
+## Make model predictions and plot for clinical_signs
+### create new data where clinical_signs differs
+```{r}
+nd <- data.frame(centre = rep("A", 2),
+                 clinical_signs = c(0, 1, 0, 1),
+                 chf = rep(0, 0, 1, 1)
+                 )
+head(nd)
+```
+
+
+
+### make posterior predictions from new data
+```{r}
+ps <- posterior_survfit(mod_clin_si_true3,
+  newdata = nd,
+  times = 0,
+  extrapolate = TRUE,
+  control = list(edist = 5)) |>
+  suppressWarnings()
+head(ps)
+```
+
+
+
+### plot
+```{r}
+panel_labels <- c('1' = "No clinical signs & no CHF", '2' = "No clinical signs & CHF present",
+                  '3' = "Clinical signs present & no CHF", '4' = "Clinical signs and CHF present")
+pps <- plot(ps) +
+  aes(colour = factor(id), fill = factor(id)) +
+  scale_colour_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(0.975, 1.0)) +
+  theme(legend.position = "none") +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+print(pps)
+```
+
+
+
+## Check PH assumption visually
+### make predictions of both the hazard and log hazard
+```{r}
+ph <- suppressWarnings(posterior_survfit(mod_clin_si_true3, newdata = nd, type = "haz"))
+pl <- suppressWarnings(posterior_survfit(mod_clin_si_true3, newdata = nd, type = "loghaz"))
+
+```
+
+
+
+#### create plots
+```{r}
+pph <- plot(ph) +
+  coord_cartesian(ylim = c(0.0, 0.005)) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+ppl <- plot(pl) +
+  facet_wrap(~ id, labeller = labeller(id = panel_labels))
+```
+
+
+
+#### combine plots in grid and plot
+```{r, fig.width = 8, fig.height = 8}
+plot_grid(pph, ppl, ncol = 1)
+```
+
+
+
+## Create KM curve for clinical_signs
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + clinical_signs, data = sim_data3)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "Clinical signs",
+    fill = "Clinical signs",
+    title = "Kaplan–Meier curves stratified by clinical signs"
+  )
+```
+
+
+
+## Create KM curve for right chf
+```{r}
+
+
+# Basic KM curve for the entire dataset
+km_strat <- survfit(Surv(time, status) ~ 1 + chf, data = sim_data3)
+
+# Convert to tidy format
+km_df <- broom::tidy(km_strat)
+
+
+# Columns: time, estimate, conf.low, conf.high, strata, n.risk, n.event, n.censor
+ggplot(km_df, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+  geom_step() +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+  theme_bw() +
+  labs(
+    x = "Time",
+    y = "Survival probability",
+    colour = "CHF",
+    fill = "Clinical signs",
+    title = "Kaplan–Meier curves stratified by CHF"
+  )
+```
+
+
+
+## Fit frequentist Cox PH model for effect of right clinical_signs
+```{r}
+# Fit Cox PH model
+freq_cox_clinical_signs3 <- coxph(Surv(time, status) ~ 1 + clinical_signs + chf + strata(centre),
+                data = sim_data3)
+
+summary(freq_cox_clinical_signs3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
