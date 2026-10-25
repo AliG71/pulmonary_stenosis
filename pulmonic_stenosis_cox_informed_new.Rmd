@@ -51,11 +51,11 @@ library(bayesplot)
 ```{r}
 df <- read_xlsx("pulmonic_stenosis_data.xlsx", col_types = c("text", "text",  
                                "text", "numeric", "text", "numeric", "text",
-                               "numeric", "numeric","text", "text", "text", 
-                               "numeric", "numeric", "numeric", "numeric", "numeric",
-                               "numeric", "numeric", "numeric",
-                               "text", "numeric", "numeric", "text",
+                               "numeric", "numeric","text",
                                "numeric", "numeric", "numeric", "numeric",
+                               "numeric", "numeric",
+                               "text", "numeric", "numeric", "text",
+                               "numeric", "numeric", "numeric",
                                "numeric", "numeric", "numeric", "numeric",
                                "numeric", "numeric", "text", "numeric",
                                "numeric", "numeric", "numeric", "numeric",
@@ -286,7 +286,7 @@ Set an informative prior...
 
 #### i. Prior for beta of type
 ```{r}
-prior_beta_type <- student_t(df = 3, location = 1.292032, scale = 0.3219278, autoscale = FALSE)
+prior_beta_type <- student_t(df = 3, location = c(1.292032, 0), scale = c(0.3219278, 1.0), autoscale = FALSE)
 ```
 
 
@@ -299,13 +299,14 @@ NB use status ... rstanarm requires the dead animals to be classified as 1, whil
 mod_type <- stan_surv(formula = Surv(time, status) ~ type
                       + (1| centre),
   data = df,
-  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
+  prior_intercept = normal(location = 0, scale = 15, autoscale = FALSE),
   prior = prior_beta_type,
   prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 10000,
+  iter    = 12000,
+  warmup = 4000,
   chains = 4,
   cores = 4,
-  adapt_delta = 0.9999,  # Often helpful for complex models
+  adapt_delta = 0.99999,  # Often helpful for complex models
   seed = 666)
 ```
 
@@ -348,6 +349,8 @@ posterior_mod_type <- as.array(mod_type)
 
 
 
+
+
 ### a. Check trace plots for model
 ```{r}
 color_scheme_set("mix-blue-pink")
@@ -356,11 +359,13 @@ mcmc_trace(posterior_mod_type)
 
 
 
+
+
 ### b. Trace rank plot
 ```{r}
 color_scheme_set("mix-blue-pink")
 mcmc_rank_overlay(posterior_mod_type) +
-  ylim(175, 300)
+  ylim(300, 500)
 ```
 
 
@@ -380,9 +385,9 @@ mcmc_dens_overlay(posterior_mod_type)
 #### type_ab
 ```{r}
 draws <- as.matrix(mod_type)
-median(draws[,2]) # draws for type
-HPDI(draws[,2], 0.97) # draws for type_ab
-HPDI(draws[,2], 0.89) # draws for type_ab
+median(draws[,3]) # draws for type
+HPDI(draws[,3], 0.97) # draws for type_intermediate
+HPDI(draws[,3], 0.89) # draws for type_intermediate
 ```
 
 
@@ -390,19 +395,19 @@ HPDI(draws[,2], 0.89) # draws for type_ab
 #### type_b
 ```{r}
 draws <- as.matrix(mod_type)
-median(draws[,3]) # draws for type
-HPDI(draws[,3], 0.97) # draws for type_b
-HPDI(draws[,3], 0.89) # draws for type_b
+median(draws[,2]) # draws for type_b
+HPDI(draws[,2], 0.97) # draws for type_b
+HPDI(draws[,2], 0.89) # draws for type_b
 ```
 
 
 
 
 ### b. Hypothesis tests on beta parameters
-#### type_ab
+#### type_intermediate
 probability that effect is positive
 ```{r}
-mean(draws[,2] > 0) #  draws for type_ab
+mean(draws[,3] > 0) #  draws for type_intermediate
 ```
 
 
@@ -410,7 +415,7 @@ mean(draws[,2] > 0) #  draws for type_ab
 #### type_b
 probability that effect is positive
 ```{r}
-mean(draws[,3] > 0) # draws for type_b
+mean(draws[,2] > 0) # draws for type_b
 ```
 
 
@@ -419,17 +424,19 @@ mean(draws[,3] > 0) # draws for type_b
 
 
 ```{r}
-type_ab <- draws[,2] # draws for type_ab)
-type_b <- draws[,3] # draws for type_b)
+type_intermediate <- draws[,3] # draws for type_intermediate)
+type_b <- draws[,2] # draws for type_b)
 ```
+
+
 
 
 ### c. Plot posterior distribution for beta coefficient
 #### i. type_ab
 ```{r}
-ggplot(data.frame(type_ab), aes(x = type_ab)) +
+ggplot(data.frame(type_intermediate), aes(x = type_intermediate)) +
   geom_density(fill = "orange", alpha = 0.7) +
-  labs(title = "Posterior distribution of beta coefficient for type AB",
+  labs(title = "Posterior of beta coefficient for intermediate type",
        x = "Beta coefficient",
        y = "Density") +
   theme_bw() +
@@ -442,7 +449,7 @@ ggplot(data.frame(type_ab), aes(x = type_ab)) +
   geom_vline(xintercept = 0, linetype="dotted", 
                 color = "firebrick", linewidth = 1.5) +
   xlim(-2.5, 2.5) +
-  ylim(0, 1.5)
+  ylim(0, 1.25)
 ```
 
 
@@ -464,12 +471,8 @@ ggplot(data.frame(type_b), aes(x = type_b)) +
   geom_vline(xintercept = 0, linetype="dotted", 
                 color = "firebrick", linewidth = 1.5) +
   xlim(-2.5, 2.5) +
-  ylim(0, 1.5)
+  ylim(0, 1.25)
 ```
-
-
-
-
 
 
 
@@ -489,7 +492,7 @@ plot(hdi)
 ## Get density plots for posterior distributons of beta parameters
 ```{r}
 mcmc_dens(posterior_mod_type,
-  pars = c("typeab", "typeb")) +
+  pars = c("typeb", "typeintermediate")) +
   xlim(-3,3)
 ```
 
@@ -498,7 +501,7 @@ mcmc_dens(posterior_mod_type,
 ## Get area plot for posterior distributons of beta parameters
 ```{r}
 mcmc_areas(posterior_mod_type,
-  pars = "typeab", "typeb")
+  pars = "typeb", "typeintermediate")
 ```
 
 
@@ -506,18 +509,18 @@ mcmc_areas(posterior_mod_type,
 ## Calculate hazard ratios for type
 ### a. get posterior draws
 ```{r}
-type_ab_hr <- exp(draws[,2]) # draws for type_ab)
-type_b_hr <- exp(draws[,3]) # draws for type_b)
+type_intermediate_hr <- exp(draws[,3]) # draws for type_intermediate)
+type_b_hr <- exp(draws[,2]) # draws for type_b)
 ```
 
 
 
 ### b. Summarise hazard ratios
-#### i. type_ab
+#### i. type_intermediate
 ```{r}
-median(type_ab_hr)
-hpdi_type_ab_hr <- HPDI(type_ab_hr, prob = c(0.89, 0.97))
-hpdi_type_ab_hr
+median(type_intermediate_hr)
+hpdi_type_intermediate_hr <- HPDI(type_intermediate_hr, prob = c(0.89, 0.97))
+hpdi_type_intermediate_hr
 ```
 
 
@@ -532,11 +535,11 @@ hpdi_type_b_hr
 
 
 ### c. Plot posterior distribution for hazard ratio
-#### i. type_ab
+#### i. type_intermediate
 ```{r}
-ggplot(data.frame(type_ab_hr), aes(x = type_ab_hr)) +
+ggplot(data.frame(type_intermediate_hr), aes(x = type_intermediate_hr)) +
   geom_density(fill = "lightblue", alpha = 0.7) +
-  labs(title = "Posterior distribution of Hazard ratios for type AB",
+  labs(title = "Posterior of Hazard ratios for intermediate type",
        x = "Hazard Ratio",
        y = "Density") +
   theme_bw() +
@@ -549,7 +552,7 @@ ggplot(data.frame(type_ab_hr), aes(x = type_ab_hr)) +
   geom_vline(xintercept = 1, linetype="dotted", 
                 color = "firebrick", linewidth = 1.5) +
   xlim(0, 5) +
-  ylim(0, 0.6)
+  ylim(0, 1.25)
 ```
 
 
@@ -571,7 +574,7 @@ ggplot(data.frame(type_b_hr), aes(x = type_b_hr)) +
   geom_vline(xintercept = 1, linetype="dotted", 
                 color = "firebrick", linewidth = 1.5) +
   xlim(0, 5) +
-  ylim(0, 0.6)
+  ylim(0, 1.25)
 ```
 
 
@@ -614,12 +617,12 @@ prior_draws <- as.matrix(mod_type_prior_only)
 
 
 
-#### b. type_ab
+#### b. type_intermediate
 ##### i. plot marginal distributions for posterior and prior
 ``` {r}
 # Compare marginal distributions
-dens(post_draws[, "typeab"], show.zero = TRUE, col = "red", main = "Informed prior vs posterior for type AB", xlab = "Beta coefficient for effect of type AB", xlim = c(-2, 3), ylim = c(0, 1.4) ) 
-dens(prior_draws[, "typeab"], add=TRUE, col = "blue", show.zero = TRUE)
+dens(post_draws[, "typeintermediate"], show.zero = TRUE, col = "red", main = "Informed prior vs posterior for intermediate type", xlab = "Beta coefficient for effect of intermediate type", xlim = c(-2, 3), ylim = c(0, 1.4) ) 
+dens(prior_draws[, "typeintermediate"], add=TRUE, col = "blue", show.zero = TRUE)
 ```
 
 
@@ -628,10 +631,10 @@ dens(prior_draws[, "typeab"], add=TRUE, col = "blue", show.zero = TRUE)
 ##### ii. compute prior tail probability of posterior mean
 If this probability is very small (e.g. < 0.05), the posterior lies in a region the prior considered implausible.
 ```{r}
-beta_hat <- mean(post_draws[, "typeab"])
+beta_hat <- mean(post_draws[, "typeintermediate"])
 
-mean(abs(prior_draws[, "typeab"] - beta_hat) <
-       abs(prior_draws[, "typeab"] - mean(prior_draws[, "typeab"])))
+mean(abs(prior_draws[, "typeintermediate"] - beta_hat) <
+       abs(prior_draws[, "typeintermediate"] - mean(prior_draws[, "typeintermediate"])))
 
 ```
 
@@ -671,9 +674,9 @@ Given such a small scale, best to adjust the strong prior is based on the combin
 Therefore, strong prior should be 1x the combine scale, then increase this by 2x for moderate and 4x for weak..
 ```{r}
 priors_bin <- list(
-  weak = student_t(df = 3, location = 1.292032, scale = 1.2877111, autoscale = FALSE),
-  moderate = student_t(df = 3, location = 1.292032, scale = 0.6438556, autoscale = FALSE),
-  strong = student_t(df = 3, location = 1.292032, scale = 0.3219278, autoscale = FALSE)
+  weak = student_t(df = 3, location = c(1.292032, 0), scale = c(1.2877111, 2.0), autoscale = FALSE),
+  moderate = student_t(df = 3, location = c(1.292032, 0), scale = c(0.6438556, 1.0), autoscale = FALSE),
+  strong = student_t(df = 3, location = c(1.292032, 0), scale = c(0.3219278, 0.5), autoscale = FALSE)
 )
 ```
 
@@ -684,6 +687,8 @@ Set an informative, weakly-regularising prior...
 strong         0.3219278
 moderate       0.6438556
 weak           1.2877111
+
+
 
 
 #### b. refit model with different priors and compare results
@@ -707,23 +712,23 @@ fits <- lapply(priors_bin, function(p) {
 
 
 
-#### c. compare posterior intervals for hazard ratios for type_ab across different priors
-##### i. type_ab
+#### c. compare posterior intervals for hazard ratios for type_intermediate across different priors
+##### i. type_intermediate
 ```{r}
-# calculate median hazard ratio for type_ab across different priors
+# calculate median hazard ratio for type_intermediate across different priors
 HR_med_sens <- sapply(fits, function(f) {
   posterior::as_draws_df(f) |>
     as.data.frame() |>
     summarise(
-      median = exp(quantile(typeab, probs = 0.5))
+      median = exp(quantile(typeintermediate, probs = 0.5))
     )
 })
 HR_med <- c(HR_med_sens[[1]], HR_med_sens[[2]], HR_med_sens[[3]])
 
 
-# calculate 89% credible interval for hazard ratio for type_ab across different priors
+# calculate 89% credible interval for hazard ratio for type_intermediate across different priors
 HR_sens <- sapply(fits, function(f) {
-  exp(posterior_interval(f, pars = "typeab", prob = 0.89))
+  exp(posterior_interval(f, pars = "typeintermediate", prob = 0.89))
 })
 
 # combine median and credible intervals into a summary table
@@ -742,7 +747,7 @@ HR_sens_summary
 
 ##### ii. type_b
 ```{r}
-# calculate median hazard ratio for type_ab across different priors
+# calculate median hazard ratio for type_b across different priors
 HR_med_sens <- sapply(fits, function(f) {
   posterior::as_draws_df(f) |>
     as.data.frame() |>
@@ -753,7 +758,7 @@ HR_med_sens <- sapply(fits, function(f) {
 HR_med <- c(HR_med_sens[[1]], HR_med_sens[[2]], HR_med_sens[[3]])
 
 
-# calculate 89% credible interval for hazard ratio for type_ab across different priors
+# calculate 89% credible interval for hazard ratio for type_b across different priors
 HR_sens <- sapply(fits, function(f) {
   exp(posterior_interval(f, pars = "typeb", prob = 0.89))
 })
@@ -778,7 +783,7 @@ Text for paper:
 ## Make model predictions and plot
 ### 1. Create new data where type differs
 ```{r}
-nd1 <- data.frame(type = c("a", "b", "ab"),
+nd1 <- data.frame(type = c("a", "b", "intermediate"),
                  centre = c("p", "p", "p"))
 head(nd1)
 ```
@@ -801,7 +806,7 @@ head(ps)
 
 #### 3. Plot
 ```{r}
-panel_labels <- c('1' = "Type A", '2' = "Type B", '3' = "Type AB")
+panel_labels <- c('1' = "Type A", '2' = "Type B", '3' = "Intermediate type")
 pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   theme(legend.position = "none") +
@@ -881,13 +886,14 @@ mod_age <- stan_surv(formula = Surv(time, status) ~ s_age
                      + (1| centre),
   data = df,
   basehaz = "ms",
-  prior_intercept = normal(location = 0, scale = 22, autoscale = FALSE),
+  prior_intercept = normal(location = 0, scale = 22.5, autoscale = FALSE),
   prior = prior_beta_age,
   prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 10000,
+  iter    = 12000,
+  warmup = 4000,
   chains = 4,
   cores = 4,
-  adapt_delta = 0.999,  # Often helpful for complex models
+  adapt_delta = 0.99999,  # Often helpful for complex models
   seed = 666)
 ```
 
@@ -945,7 +951,7 @@ mcmc_trace(posterior_mod_age)
 ```{r}
 color_scheme_set("mix-blue-pink")
 mcmc_rank_overlay(posterior_mod_age)  +
-  ylim(c(200, 350))
+  ylim(325, 500)
 ```
 
 
@@ -997,7 +1003,9 @@ ggplot(data.frame(s_age), aes(x = s_age)) +
                axis.text.x = element_text(color = "grey50", size = 12),
                axis.text.y = element_text(color = "grey50",size = 12)) +
   geom_vline(xintercept = 0, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5)
+                color = "firebrick", linewidth = 1.5) +
+  xlim(-0.75, 0.75) +
+  ylim(0, 4)
 ```
 
 
@@ -1042,6 +1050,8 @@ s_age_hr <- exp(draws[,2]) # 2nd column is draws for s_age)
 
 
 
+
+
 ### b. Summarise hazard ratios for s_age
 ```{r}
 median(s_age_hr)
@@ -1066,7 +1076,9 @@ ggplot(data.frame(s_age_hr), aes(x = s_age_hr)) +
                axis.text.x = element_text(color = "grey50", size = 12),
                axis.text.y = element_text(color = "grey50",size = 12)) +
   geom_vline(xintercept = 1, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5)
+                color = "firebrick", linewidth = 1.5) +
+  xlim(0.5, 2.0) +
+  ylim(0, 3.5)
 ```
 
 
@@ -1102,6 +1114,8 @@ ps_check(mod_age_prior_only)  |>
 post_draws  <- as.matrix(mod_age)
 prior_draws <- as.matrix(mod_age_prior_only)
 ```
+
+
 
 
 
@@ -1174,7 +1188,7 @@ fits <- lapply(priors_bin, function(p) {
 
 
 
-#### c. compare posterior intervals for hazard ratios for type_ab across different priors
+#### c. compare posterior intervals for hazard ratios for s_age across different priors
 ```{r}
 # calculate median hazard ratio across different priors
 HR_med_sens <- sapply(fits, function(f) {
@@ -1293,7 +1307,7 @@ Set an informative prior...
  
 ```{r}
 prior_beta_sx <- student_t(df = 3, location = c(-0.879165, 0, 0, 0, 0, 0, 0),
-                           scale = c(0.29119395, 2, 2, 2, 2, 2, 2),
+                           scale = c(0.29119395, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5),
                            autoscale = c(FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, TRUE))
 ```
 NB needed to set a tighter scale variable for prior_intercept and also prior_beta_sx in order to improve regularisation and resolve divergent transitions.
@@ -1315,13 +1329,14 @@ mod_sx <- stan_surv(formula = Surv(time, status) ~ surgery
                     + (1| centre),
   data = df,
   basehaz = "ms",
-  prior_intercept = normal(location = 0, scale = 10, autoscale = FALSE),
+  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
   prior = prior_beta_sx,
   prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 10000,
+  iter    = 12000,
+  warmup = 4000,
   chains = 4,
   cores = 4,
-  adapt_delta = 0.9999,  # Often helpful for complex models
+  adapt_delta = 0.9999999,  # Often helpful for complex models
   seed = 666)
 ```
 
@@ -1353,157 +1368,6 @@ print(mod_sx, digits = 3)
 
 
 
-##  Plot Baseline hazard of model
-```{r}
-plot(mod_sx)
-```
-
-
-
-## Plots of model convergences
-
-## Get results
-```{r}
-posterior_mod_sx <- as.array(mod_sx)
-```
-
-
-
-### a. Check trace plots for model
-```{r}
-color_scheme_set("mix-blue-pink")
-mcmc_trace(posterior_mod_sx)
-```
-
-
-
-### b. Trace rank plot
-```{r}
-color_scheme_set("mix-blue-pink")
-mcmc_rank_overlay(posterior_mod_sx) +
-  ylim(c(175, 300))
-```
-
-
-
-### c. get dens overlay plot for chains
-```{r}
-color_scheme_set("blue")
-mcmc_dens_overlay(posterior_mod_sx)
-```
-
-
-
-## Summaries of coefficients
-
-### a. HPDI for the different beta parameters
-```{r}
-draws <- as.matrix(mod_sx)
-median(draws[,2]) # draws for surgery
-HPDI(draws[,2], 0.97) # draws for surgery
-HPDI(draws[,2], 0.89) # draws for surgery
-```
-
-
-
-### b. Hypothesis tests on beta parameters
-#### surgery
-probability that effect is negative
-```{r}
-mean(draws[,2] < 0) # draws for surgery
-```
-
-
-
-
-### c. Plot posterior distribution for beta coefficient of surgery
-```{r}
-s_sx <- draws[,2] # 2nd column is draws for surgery
-
-ggplot(data.frame(s_sx), aes(x = s_sx)) +
-  geom_density(fill = "orange", alpha = 0.7) +
-  labs(title = "Posterior of beta coefficient for intervention",
-       x = "Beta coefficient",
-       y = "Density") +
-  theme_bw() +
-           theme(axis.title.y = element_text(size=16, face="bold"), 
-               axis.title.x = element_text(size=14, face="bold"),
-               title = element_text(size=14, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 12),
-               axis.text.y = element_text(color = "grey50",size = 12)) +
-  geom_vline(xintercept = 0, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5) +
-  xlim(-2.5, 1)
-```
-
-
-
-
-
-
-
-## Get HDI for coefficients
-```{r}
-hdi <- bayestestR::hdi(mod_sx, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "surgery")
-plot(hdi)
-```
-
-
-
-## Get density plots for posterior distributons of beta parameters
-```{r}
-mcmc_dens(posterior_mod_sx,
-  pars = c("surgery1"))
-```
-
-
-
-## Get area plot for posterior distributons of beta parameters
-```{r}
-mcmc_areas(posterior_mod_sx,
-  pars = "surgery1")
-```
-
-
-
-## Calculate hazard ratios for surgery
-### a. get posterior draws
-```{r}
-surgery_hr <- exp(draws[,2]) # 2nd column is draws for surgery)
-```
-
-
-
-### b. Summarise hazard ratios for surgery
-```{r}
-median(surgery_hr)
-hpdi_surgery <- HPDI(surgery_hr, prob = c(0.89, 0.97))
-hpdi_surgery
-```
-
-
-
-### c. Plot posterior distribution for hazard ratio of surgery
-```{r}
-ggplot(data.frame(surgery_hr), aes(x = surgery_hr)) +
-  geom_density(fill = "lightblue", alpha = 0.7) +
-  labs(title = "Posterior distribution of hazard ratio for intervention",
-       x = "Hazard Ratio",
-       y = "Density") +
-  theme_bw() +
-           theme(axis.title.y = element_text(size=12, face="bold"), 
-               axis.title.x = element_text(size=12, face="bold"),
-               title = element_text(size=14, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 12),
-               axis.text.y = element_text(color = "grey50",size = 12)) +
-  geom_vline(xintercept = 1, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5) +
-  xlim(0, 1.5)
-```
-
-
 
 ## Check model performance
 ### 1. Check performance of posterior probability
@@ -1521,206 +1385,6 @@ mod_sx_prior_only <- update(mod_sx, prior_PD = TRUE)
 ps_check(mod_sx_prior_only) |>
   suppressWarnings()
 ```
-
-
-
-
-
-
-
-### 3. Check posterior vs prior for beta variable
-#### a. extract draws for posterior and prior
-```{r}
-# extract draws
-post_draws  <- as.matrix(mod_sx)
-prior_draws <- as.matrix(mod_sx_prior_only)
-```
-
-
-
-#### b. plot marginal distributions for posterior and prior
-``` {r}
-# Compare marginal distributions
-dens(post_draws[, "surgery1"], show.zero = TRUE, col = "red", main = "Informed prior vs posterior for intervention", xlab = "Beta coefficient for effect of intervention", xlim = c(-2.5, 1), ylim = c(0, 1.8)) 
-dens(prior_draws[, "surgery1"], add=TRUE, col = "blue", show.zero = TRUE)
-```
-
-
-
-#### c. compute prior tail probability of posterior mean
-If this probability is very small (e.g. < 0.05), the posterior lies in a region the prior considered implausible.
-```{r}
-beta_hat <- mean(post_draws[, "surgery1"])
-
-mean(abs(prior_draws[, "surgery1"] - beta_hat) <
-       abs(prior_draws[, "surgery1"] - mean(prior_draws[, "surgery1"])))
-
-```
-
-
-
-
-
-### 4. Sensitivity analyses to assess robustness of results to choice of prior
-#### a. create priors of different strength for surgery variable
-To determine whether the substantive conclusions depend upon the exact prior choice.
-
-NB the scale variable is strengthened or weakened by multiplying or dividing the scale of the main prior by 2, respectively. The location is set to the posterior mean from the main model, to ensure that the priors are centred on a plausible value.
-```{r}
-priors_bin <- list(
-  weak = student_t(df = 3, location = c(-0.879165, 0, 0, 0, 0, 0, 0),
-                   scale = c(1.1647758, 2, 2, 2, 2, 2, 2),
-                   autoscale = c(FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, TRUE)),
-  moderate = student_t(df = 3, location = c(-0.879165, 0, 0, 0, 0, 0, 0),
-                       scale = c(0.5823879, 2, 2, 2, 2, 2, 2),
-                       autoscale = c(FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, TRUE)),
-  strong = student_t(df = 3, location = c(-0.879165, 0, 0, 0, 0, 0, 0),
-                     scale = c(0.2911939, 2, 2, 2, 2, 2, 2),
-                     autoscale = c(FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, TRUE))
-)
-```
-
-
-Set an informative, regularising prior...
- ~ student_t(df = 3, location = -0.8844253, scale = 0.2858661)
-
-strong         0.2911939
-moderate       0.5823879
-weak           1.1647758
-
-
-#### b. refit model with different priors and compare results
-```{r}
-fits <- lapply(priors_bin, function(p) {
-  stan_surv(formula = Surv(time, status) ~ surgery
-                    + s_age
-                    + concurrent_congenital
-                    + type
-                    + clinical_signs
-                    + s_pv_max_pg
-                    + (1| centre),
-            basehaz = "ms",
-            data = df,
-            prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
-            prior = p,
-            prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-            iter    = 2000,
-            chains = 4,
-            cores = 4,
-            adapt_delta = 0.9999,  # Often helpful for complex models
-            seed = 666
-            )
-})
-```
-
-
-
-#### c. compare posterior intervals for hazard ratios for type_ab across different priors
-```{r}
-# calculate median hazard ratio across different priors
-HR_med_sens <- sapply(fits, function(f) {
-  posterior::as_draws_df(f) |>
-    as.data.frame() |>
-    summarise(
-      median = exp(quantile(surgery1, probs = 0.5))
-    )
-})
-HR_med <- c(HR_med_sens[[1]], HR_med_sens[[2]], HR_med_sens[[3]])
-
-
-# calculate 89% credible interval for hazard ratio across different priors
-HR_sens <- sapply(fits, function(f) {
-  exp(posterior_interval(f, pars = "surgery1", prob = 0.89))
-})
-
-# combine median and credible intervals into a summary table
-HR_sens_summary <- rbind(HR_med, HR_sens)
-row.names(HR_sens_summary) <- c("Median", "Lower", "Upper")
-
-# transpose the table for better readability
-HR_sens_summary
-```
-
-
-
-## Make model predictions and plot for surgery
-### 1. Create new data where age differs
-```{r}
-nd <- data.frame(centre = rep("p", 2),
-                 surgery = c(0, 1),
-                 s_age = rep(0, 2),
-                 clinical_signs = rep(0, 2),
-                 concurrent_congenital = rep(0, 2),
-                 type = rep("a", 2),
-                 s_pv_max_pg = rep(0, 2)
-                 )
-head(nd)
-```
-
-
-
-### 2. Make posterior predictions from new data
-```{r}
-ps <- posterior_survfit(mod_sx,
-  newdata = nd,
-  times = 0,
-  extrapolate = TRUE) |>
-  suppressWarnings()
-head(ps)
-```
-
-
-
-### 3. Plot
-```{r}
-panel_labels <- c('1' = "No Intervention", '2' = "Intervention performed")
-pps <- plot(ps) +
-  aes(colour = factor(id), fill = factor(id)) +
-  theme(legend.position = "none") +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels)) +
-           theme(axis.title.y = element_text(size=12, face="bold"), 
-               axis.title.x = element_text(size=12, face="bold"),
-               title = element_text(size=12, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 10),
-               axis.text.y = element_text(color = "grey50",size = 10)) +
-            theme(strip.text.x = element_text(size = 10, face = "bold.italic"),
-                   strip.background = element_rect(fill="white")
-        )
-
-print(pps)
-```
-
-
-
-## Check PH assumption visually
-### make predictions of both the hazard and log hazard
-```{r}
-ph <- suppressWarnings(posterior_survfit(mod_sx, newdata = nd, type = "haz"))
-pl <- suppressWarnings(posterior_survfit(mod_sx, newdata = nd, type = "loghaz"))
-
-```
-
-
-
-#### create plots
-```{r}
-pph <- plot(ph) +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels))
-ppl <- plot(pl) +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels))
-```
-
-
-
-#### combine plots in grid and plot
-```{r, fig.width = 8, fig.height = 8}
-plot_grid(pph, ppl, ncol = 1)
-```
-
-
-
-
 
 
 
@@ -1754,13 +1418,14 @@ mod_pg <- stan_surv(formula = Surv(time, status) ~ s_pv_max_pg
                       + (1| centre),
   data = df,
   basehaz = "ms",
-  prior_intercept = normal(location = 0, scale = 10, autoscale = FALSE),
+  prior_intercept = normal(location = 0, scale = 12.5, autoscale = FALSE),
   prior = prior_beta_pg,
   prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 10000,
+  iter    = 12000,
+  warmup = 4000,
   chains = 4,
   cores = 4,
-  adapt_delta = 0.9999,  # Often helpful for complex models
+  adapt_delta = 0.9999999,  # Often helpful for complex models
   seed = 666)
 ```
 
@@ -1804,6 +1469,8 @@ posterior_mod_pg <- as.array(mod_pg)
 
 
 
+
+
 ### a. Check trace plots for model
 ```{r}
 color_scheme_set("mix-blue-pink")
@@ -1816,7 +1483,7 @@ mcmc_trace(posterior_mod_pg)
 ```{r}
 color_scheme_set("mix-blue-pink")
 mcmc_rank_overlay(posterior_mod_pg) +
-  ylim(c(200, 300))
+  ylim(325, 500)
 ```
 
 
@@ -1871,7 +1538,9 @@ ggplot(data.frame(s_pg), aes(x = s_pg)) +
                axis.text.x = element_text(color = "grey50", size = 12),
                axis.text.y = element_text(color = "grey50",size = 12)) +
   geom_vline(xintercept = 0, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5)
+                color = "firebrick", linewidth = 1.5) +
+  xlim(-0.6, 0.8) +
+  ylim(0, 2.5)
 ```
 
 
@@ -1935,7 +1604,9 @@ ggplot(data.frame(s_pv_max_pg_hr), aes(x = s_pv_max_pg_hr)) +
                axis.text.x = element_text(color = "grey50", size = 12),
                axis.text.y = element_text(color = "grey50",size = 12)) +
   geom_vline(xintercept = 1, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5)
+                color = "firebrick", linewidth = 1.5) +
+  xlim(0.5, 2.25) +
+  ylim(0, 2.5)
 ```
 
 
@@ -1961,7 +1632,7 @@ ps_check(mod_pg_prior_only) |>
 
 
 
-### 3. Check prosterior vs prior for beta variable
+### 3. Check posterior vs prior for beta variable
 #### a. extract draws for posterior and prior
 ```{r}
 # extract draws
@@ -1974,7 +1645,7 @@ prior_draws <- as.matrix(mod_pg_prior_only)
 #### b. plot marginal distributions for posterior and prior
 ``` {r}
 # Compare marginal distributions
-dens(post_draws[, "s_pv_max_pg"], show.zero = TRUE, col = "red", main = "Informed prior vs posterior for PVmax PG", xlab = "Beta coefficient for effect of PVmax PG",, xlim = c(-0.5, 1.5), ylim = c(0, 3.0)) 
+dens(post_draws[, "s_pv_max_pg"], show.zero = TRUE, col = "red", main = "Informed prior vs posterior for PVmax PG", xlab = "Beta coefficient for effect of PVmax PG", xlim = c(-0.5, 1.5), ylim = c(0, 3.0)) 
 dens(prior_draws[, "s_pv_max_pg"], add=TRUE, col = "blue", show.zero = TRUE)
 ```
 
@@ -2037,6 +1708,8 @@ fits <- lapply(priors_bin, function(p) {
             )
 })
 ```
+
+
 
 
 
@@ -2196,10 +1869,11 @@ mod_chf <- stan_surv(formula = Surv(time, status) ~ chf
   prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
   prior = prior_beta_chf,
   prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 10000,
+  iter    = 12000,
+  warmup = 4000,
   chains = 4,
   cores = 4,
-  adapt_delta = 0.999,  # Often helpful for complex models
+  adapt_delta = 0.999999,  # Often helpful for complex models
   seed = 666)
 ```
 
@@ -2243,6 +1917,8 @@ posterior_mod_chf <- as.array(mod_chf)
 
 
 
+
+
 ### a. Check trace plots for model
 ```{r}
 color_scheme_set("mix-blue-pink")
@@ -2255,7 +1931,7 @@ mcmc_trace(posterior_mod_chf)
 ```{r}
 color_scheme_set("mix-blue-pink")
 mcmc_rank_overlay(posterior_mod_chf) +
-  ylim(200, 325)
+  ylim(325, 500)
 ```
 
 
@@ -2307,7 +1983,8 @@ ggplot(data.frame(s_chf), aes(x = s_chf)) +
                axis.text.y = element_text(color = "grey8",size = 12)) +
   geom_vline(xintercept = 0, linetype="dotted", 
                 color = "firebrick", linewidth = 1.5) +
-  xlim(-1, 4)
+  xlim(-1, 4) +
+  ylim(0, 0.9)
 ```
 
 
@@ -2410,6 +2087,8 @@ ps_check(mod_chf_prior_only) |>
 post_draws  <- as.matrix(mod_chf)
 prior_draws <- as.matrix(mod_chf_prior_only)
 ```
+
+
 
 
 
@@ -2616,35 +2295,38 @@ plot_grid(pph, ppl, ncol = 1)
 
 
 
-# XIIa. Bayesian multi-level survival analysis for effect of ATENOLOL pre with random intercept for centre and control set
+# XII. Bayesian multi-level survival analysis for effect of ATENOLOL with random intercept for centre and control set
 
 ## Set prior for beta variables
 Set an informative prior...
  ~ student_t(df = 3, location = 1.866284, scale = 0.8443848)
  
 ```{r}
-prior_beta_aten_pre <- student_t(df = 3, location = c(1.866284, 0), scale = c(0.8443848, 2), autoscale = c(FALSE, TRUE))
+prior_beta_aten <- student_t(df = 3, location = c(1.866284, 0), scale = c(0.8443848, 2), autoscale = c(FALSE, TRUE))
 ```
  
 Based on the DAG, use the following adjustment variables: RV syst dys, referral centre.
 
 
 
+
+
 ## Fit model
 NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
 ```{r}
-mod_aten_pre <- stan_surv(formula = Surv(time, status) ~ atenolol_pre
+mod_aten <- stan_surv(formula = Surv(time, status) ~ atenolol
                       + s_tapse
                       + (1| centre),
   data = df,
   basehaz = "ms",
-  prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
-  prior = prior_beta_aten_pre,
+  prior_intercept = normal(location = 0, scale = 15, autoscale = FALSE),
+  prior = prior_beta_aten,
   prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 10000,
+  iter    = 12000,
+  warmup = 4000,
   chains = 4,
   cores = 4,
-  adapt_delta = 0.99999,  # Often helpful for complex models
+  adapt_delta = 0.999999,  # Often helpful for complex models
   control = list(max_treedepth = 20),
   init = 0.1,
   seed = 666)
@@ -2654,186 +2336,22 @@ mod_aten_pre <- stan_surv(formula = Surv(time, status) ~ atenolol_pre
 
 ## Summarise priors from model
 ```{r}
-prior_summary(mod_aten_pre)
+prior_summary(mod_aten)
 ```
 
 
 
 ## Model summary
 ```{r}
-summary(mod_aten_pre)
+summary(mod_aten)
 ```
 
 
 
 ## Model short summary
 ```{r}
-print(mod_aten_pre, digits = 3)
+print(mod_aten, digits = 3)
 ```
-
-
-
-## Plot Baseline hazard of model
-```{r}
-plot(mod_aten_pre)
-```
-
-
-
-## Plots of model convergences
-
-## Get results
-```{r}
-posterior_mod_aten_pre <- as.array(mod_aten_pre)
-```
-
-
-
-### a. Check trace plots for model
-```{r}
-color_scheme_set("mix-blue-pink")
-mcmc_trace(posterior_mod_aten_pre)
-```
-
-
-
-### b. Trace rank plot
-```{r}
-color_scheme_set("viridis")
-mcmc_rank_overlay(posterior_mod_aten_pre) +
-  ylim(200,300)
-```
-
-
-### c. get dens overlay plot for chains
-```{r}
-color_scheme_set("blue")
-mcmc_dens_overlay(posterior_mod_aten_pre)
-```
-
-
-
-
-## Summaries of coefficients
-
-### a. HPDI for the different beta parameters
-```{r}
-draws <- as.matrix(mod_aten_pre)
-median(draws[,2]) # draws for atenolol
-HPDI(draws[,2], 0.97) # draws for atenolol
-HPDI(draws[,2], 0.89) # draws for atenolol
-```
-
-
-
-### b. Hypothesis tests on beta parameters
-##### i. probability that effect is positive
-```{r}
-mean(draws[,2] > 0) # draws for atenolol_pre
-```
-
-
-
-##### ii. probability that effect is negative
-```{r}
-mean(draws[,2] < 0) # draws for atenolol_pre
-```
-
-
-
-
-### c. Plot posterior distribution for beta coefficient of s_aten_pre
-```{r}
-s_aten_pre <- draws[,2] # 2nd column is draws for s_aten_pre
-
-ggplot(data.frame(s_aten_pre), aes(x = s_aten_pre)) +
-  geom_density(fill = "orange", alpha = 0.7) +
-  labs(title = "Posterior of beta coefficient for initial atenolol",
-       x = "Beta coefficient",
-       y = "Density") +
-  theme_bw() +
-           theme(axis.title.y = element_text(size=16, face="bold"), 
-               axis.title.x = element_text(size=14, face="bold"),
-               title = element_text(size=14, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 12),
-               axis.text.y = element_text(color = "grey50",size = 12)) +
-  geom_vline(xintercept = 0, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5) +
-  xlim(-5, 2) +
-  ylim(0, 0.9)
-```
-
-
-
-
-
-
-
-
-### a. Get HDI for coefficients
-```{r}
-hdi <- bayestestR::hdi(mod_aten_pre, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "atenolol_pre")
-plot(hdi)
-```
-
-
-
-## Get density plots for posterior distributons of beta parameters
-```{r}
-mcmc_dens(posterior_mod_aten_pre,
-  pars = c("atenolol_pre"))
-```
-
-
-
-## Get area plot for posterior distributons of beta parameters
-```{r}
-mcmc_areas(posterior_mod_aten_pre,
-  pars = "atenolol_pre")
-```
-
-
-
-## Calculate hazard ratios for atenolol
-### a. get posterior draws
-```{r}
-aten_hr <- exp(draws[,2]) # 2nd column is draws for atenolol_pre
-```
-
-
-
-### b. Summarise hazard ratios for atenolol_pre
-```{r}
-median(aten_hr)
-hpdi_aten_hr <- HPDI(aten_hr, prob = c(0.89, 0.97))
-hpdi_aten_hr
-```
-
-
-
-### c. Plot posterior distribution for hazard ratio of atenolol
-```{r}
-ggplot(data.frame(aten_hr), aes(x = aten_hr)) +
-  geom_density(fill = "lightblue", alpha = 0.7) +
-  labs(title = "Posterior of hazard ratio for initial atenolol treatment",
-       x = "Hazard Ratio",
-       y = "Density") +
-
-  theme_bw() +
-           theme(axis.title.y = element_text(size=12, face="bold"), 
-               axis.title.x = element_text(size=12, face="bold"),
-               title = element_text(size=14, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 12),
-               axis.text.y = element_text(color = "grey50",size = 12)) +
-  geom_vline(xintercept = 1, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5) +
-  xlim(0, 2) +
-  ylim(0, 3)
-```
-
-
 
 
 
@@ -2842,7 +2360,7 @@ ggplot(data.frame(aten_hr), aes(x = aten_hr)) +
 ### 1. Check performance of posterior probability
 NB equivalent of pp_check
 ```{r}
-ps_check(mod_aten_pre) |>
+ps_check(mod_aten) |>
   suppressWarnings()
 ```
 
@@ -2850,707 +2368,10 @@ ps_check(mod_aten_pre) |>
 
 ### 2. Check performance of prior probability
 ```{r}
-mod_aten_pre_prior_only <- update(mod_aten_pre, prior_PD = TRUE)
-ps_check(mod_aten_pre_prior_only) |>
+mod_aten_prior_only <- update(mod_aten, prior_PD = TRUE)
+ps_check(mod_aten_prior_only) |>
   suppressWarnings()
 ```
-
-
-
-
-### 3. Check posterior vs prior for beta variable
-#### a. extract draws for posterior and prior
-```{r}
-# extract draws
-post_draws  <- as.matrix(mod_aten_pre)
-prior_draws <- as.matrix(mod_aten_pre_prior_only)
-```
-
-
-
-#### b. plot marginal distributions for posterior and prior
-``` {r}
-# Compare marginal distributions
-dens(post_draws[, "atenolol_pre"], show.zero = TRUE, col = "red", main = "Informed prior vs posterior for initial atenolol", xlab = "Beta coefficient for effect of initial atenolol", xlim = c(-5, 4), ylim = c(0, 0.9))
-dens(prior_draws[, "atenolol_pre"], add=TRUE, col = "blue", show.zero = TRUE)
-```
-
-
-
-#### c. compute prior tail probability of posterior mean
-If this probability is very small (e.g. < 0.05), the posterior lies in a region the prior considered implausible.
-```{r}
-beta_hat <- mean(post_draws[, "atenolol_pre"])
-
-mean(abs(prior_draws[, "atenolol_pre"] - beta_hat) <
-       abs(prior_draws[, "atenolol_pre"] - mean(prior_draws[, "atenolol_pre"])))
-
-```
-
-
-
-
-
-### 4. Sensitivity analyses to assess robustness of results to choice of prior
-#### a. create priors of different strength for s_vmaxav_vmaxpv variable
-To determine whether the substantive conclusions depend upon the exact prior choice.
-
-NB the scale variable is strengthened or weakened by multiplying or dividing the scale of the main prior by 2, respectively. The location is set to the posterior mean from the main model, to ensure that the priors are centred on a plausible value.
-NB.  Had to use 0.5, 1, and 2 to ensure that the chains all completed.
-```{r}
-priors_bin <- list(
-  weak = student_t(df = 3, location = c(1.866284, 0), scale = c(3.3775394, 2), autoscale = c(FALSE, TRUE)),
-  moderate = student_t(df = 3, location = c(1.866284, 0), scale = c(1.6887697, 2), autoscale = c(FALSE, TRUE)),
-  strong = student_t(df = 3, location = c(1.866284, 0), scale = c(0.8443848, 2), autoscale = c(FALSE, TRUE))
-)
-```
-
-strong         0.8443848
-moderate       1.6887697
-weak           3.3775394
-
-
-
-#### b. refit model with different priors and compare results
-```{r}
-fits <- lapply(priors_bin, function(p) {
-  stan_surv(formula = Surv(time, status) ~ atenolol_pre
-                      + s_tapse
-                      + (1| centre),
-            basehaz = "ms",
-            data = df,
-            prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
-            prior = p,
-            prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-            iter    = 2000,
-            chains = 4,
-            cores = 4,
-            adapt_delta = 0.99999,  # Often helpful for complex models
-            control = list(max_treedepth = 20),
-            init = 0.1,
-            seed = 666
-            )
-})
-```
-
-
-
-#### c. compare posterior intervals for hazard ratios for type_ab across different priors
-```{r}
-# calculate median hazard ratio across different priors
-HR_med_sens <- sapply(fits, function(f) {
-  posterior::as_draws_df(f) |>
-    as.data.frame() |>
-    summarise(
-      median = exp(quantile(atenolol_pre, probs = 0.5))
-    )
-})
-HR_med <- c(HR_med_sens[[1]], HR_med_sens[[2]], HR_med_sens[[3]])
-
-
-# calculate 89% credible interval for hazard ratio across different priors
-HR_sens <- sapply(fits, function(f) {
-  exp(posterior_interval(f, pars = "atenolol_pre", prob = 0.89))
-})
-
-# combine median and credible intervals into a summary table
-HR_sens_summary <- rbind(HR_med, HR_sens)
-row.names(HR_sens_summary) <- c("Median", "Lower", "Upper")
-
-# transpose the table for better readability
-HR_sens_summary
-```
-
-
-
-
-
-## Make model predictions and plot for mod_aten_pre
-### 1. Create new data where atenolol differs
-```{r}
-nd <- data.frame(centre = rep("p", 2),
-                 atenolol_pre = c(0, 1),
-                 arrhythmias = c(0, 1),
-                 s_tapse = rep(0, 2)
-                 )
-head(nd)
-```
-
-
-
-
-### 2. Make posterior predictions from new data
-```{r}
-ps <- posterior_survfit(mod_aten_pre,
-  newdata = nd,
-  times = 0,
-  extrapolate = TRUE) |>
-  suppressWarnings()
-head(ps)
-```
-
-
-
-### 3. Plot
-```{r}
-panel_labels <- c('1' = "No initial atenolol treatment", '2' = "Initial atenolol treatment")
-pps <- plot(ps) +
-  aes(colour = factor(id), fill = factor(id)) +
-  theme(legend.position = "none") +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels)) +
-           theme(axis.title.y = element_text(size=12, face="bold"), 
-               axis.title.x = element_text(size=12, face="bold"),
-               title = element_text(size=12, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 10),
-               axis.text.y = element_text(color = "grey50",size = 10)) +
-            theme(strip.text.x = element_text(size = 10, face = "bold.italic"),
-                   strip.background = element_rect(fill="white")
-        )
-
-print(pps)
-```
-
-
-
-
-
-## Check PH assumption visually
-### make predictions of both the hazard and log hazard
-```{r}
-ph <- suppressWarnings( posterior_survfit(mod_aten_pre, newdata = nd, type = "haz") )
-pl <- suppressWarnings( posterior_survfit(mod_aten_pre, newdata = nd, type = "loghaz") )
-
-```
-
-
-
-#### create plots
-```{r}
-pph <- plot(ph) +
-  coord_cartesian(ylim = c(0.0, 0.005)) +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels))
-ppl <- plot(pl) +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels))
-```
-
-
-
-#### combine plots in grid and plot
-```{r, fig.width = 8, fig.height = 8}
-plot_grid(pph, ppl, ncol = 1)
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-# XIIb. Bayesian multi-level survival analysis for effect of ATENOLOL post with random intercept for centre and control set
-
-## Set prior for beta variables
-Set an informative prior ...
- ~ student_t(df = 3, location = 1.866284, scale = 0.8443848)
- 
-```{r}
-prior_beta_aten_post <- student_t(df = 3, location = c(1.866284, 0, 0),
-                                    scale = c(0.8443848, 2.5, 2.5),
-                                    autoscale = c(FALSE, TRUE, FALSE))
-```
-
-Based on the DAG, use the following adjustment variables: RV syst dys, aten pre, referral centre (and sx yes).
-NB need to use surgery df to ensure that the analysis is only on dogs that have had surgery.
-
-
-
-## Fit model
-NB use status ... rstanarm requires the dead animals to be classified as 1, whilst censored are 0.
-```{r}
-mod_aten_post <- stan_surv(formula = Surv(time, status) ~ atenolol_post
-                      + s_tapse
-                      + atenolol_pre
-                      + (1| centre),
-  data = df_surg,
-  basehaz = "ms",
-  prior_intercept = normal(location = 0, scale = 8, autoscale = FALSE),
-  prior = prior_beta_aten_post,
-  prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 14000,
-  chains = 4,
-  cores = 4,
-  adapt_delta = 0.99999,  # Often helpful for complex models
-  control = list(max_treedepth = 20),
-  init = 0.1,
-  seed = 666)
-```
-
-
-
-
-
-## Summarise priors from model
-```{r}
-prior_summary(mod_aten_post)
-```
-
-
-
-## Model summary
-```{r}
-summary(mod_aten_post)
-```
-
-
-
-## Model short summary
-```{r}
-print(mod_aten_post, digits = 3)
-```
-
-
-
-## Plot Baseline hazard of model
-```{r}
-plot(mod_aten_post)
-```
-
-
-
-## Plots of model convergences
-
-## Get results
-```{r}
-posterior_mod_aten_post <- as.array(mod_aten_post)
-```
-
-
-
-### a. Check trace plots for model
-```{r}
-color_scheme_set("mix-blue-pink")
-mcmc_trace(posterior_mod_aten_post)
-```
-
-
-
-### b. Trace rank plot
-```{r}
-color_scheme_set("viridis")
-mcmc_rank_overlay(posterior_mod_aten_post) +
-  ylim(200,400)
-```
-
-
-### c. get dens overlay plot for chains
-```{r}
-color_scheme_set("blue")
-mcmc_dens_overlay(posterior_mod_aten_post)
-```
-
-
-
-
-## Summaries of coefficients
-
-### a. HPDI for the different beta parameters
-```{r}
-draws <- as.matrix(mod_aten_post)
-median(draws[,2]) # draws for atenolol
-HPDI(draws[,2], 0.97) # draws for atenolol
-HPDI(draws[,2], 0.89) # draws for atenolol
-```
-
-
-
-### b. Hypothesis tests on beta parameters
-##### i. probability that effect is positive
-```{r}
-mean(draws[,2] > 0) # draws for atenolol_post
-```
-
-
-
-##### ii. probability that effect is negative
-```{r}
-mean(draws[,2] < 0) # draws for atenolol_post
-```
-
-
-
-### c. Plot posterior distribution for beta coefficient of s_aten_post
-```{r}
-aten_post <- draws[,2] # 2nd column is draws for aten_post
-
-ggplot(data.frame(aten_post), aes(x = aten_post)) +
-  geom_density(fill = "purple", alpha = 0.3) +
-  labs(title = "Posterior of beta coefficient for atenolol after intervention",
-       x = "Beta coefficient",
-       y = "Density") +
-  theme_bw() +
-           theme(axis.title.y = element_text(size=16, face="bold"), 
-               axis.title.x = element_text(size=14, face="bold"),
-               title = element_text(size=14, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 12),
-               axis.text.y = element_text(color = "grey50",size = 12)) +
-  geom_vline(xintercept = 0, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5) +
-  xlim(-5, 2) +
-  ylim(0, 0.9)
-```
-
-
-
-
-
-
-
-
-
-
-
-## Get HDI for coefficients
-```{r}
-hdi <- bayestestR::hdi(mod_aten_post, ci = c(0.50, 0.68, 0.89, 0.97), parameters = "atenolol_post")
-plot(hdi)
-```
-
-
-
-## Get density plots for posterior distributons of beta parameters
-```{r}
-mcmc_dens(posterior_mod_aten_post,
-  pars = c("atenolol_post"))
-```
-
-
-
-## Get area plot for posterior distributons of beta parameters
-```{r}
-mcmc_areas(posterior_mod_aten_post,
-  pars = "atenolol_post")
-```
-
-
-
-## Calculate hazard ratios for atenolol
-### a. get posterior draws
-```{r}
-aten_hr <- exp(draws[,2]) # 2nd column is draws for atenolol_post
-```
-
-
-
-### b. Summarise hazard ratios for atenolol_post
-```{r}
-median(aten_hr)
-hpdi_aten_hr <- HPDI(aten_hr, prob = c(0.89, 0.97))
-hpdi_aten_hr
-```
-
-
-
-### c. Plot posterior distribution for hazard ratio of atenolol
-```{r}
-ggplot(data.frame(aten_hr), aes(x = aten_hr)) +
-  geom_density(fill = "pink", alpha = 0.7) +
-  labs(title = "Posterior of hazard ratio for atenolol after intervention",
-       x = "Hazard Ratio",
-       y = "Density") +
-  theme_bw() +
-           theme(axis.title.y = element_text(size=12, face="bold"), 
-               axis.title.x = element_text(size=12, face="bold"),
-               title = element_text(size=14, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 12),
-               axis.text.y = element_text(color = "grey50",size = 12)) +
-  geom_vline(xintercept = 1, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5) +
-  xlim(0, 2) +
-  ylim(0, 3)
-```
-
-
-
-
-
-
-## Check model performance
-### 1. Check performance of posterior probability
-NB equivalent of pp_check
-```{r}
-ps_check(mod_aten_post) |>
-  suppressWarnings()
-```
-
-
-
-### 2. Check performance of prior probability
-```{r}
-mod_aten_post_prior_only <- update(mod_aten_post, prior_PD = TRUE)
-ps_check(mod_aten_post_prior_only) |>
-  suppressWarnings()
-```
-
-
-
-
-### 3. Check posterior vs prior for beta variable
-#### a. extract draws for posterior and prior
-```{r}
-# extract draws
-post_draws  <- as.matrix(mod_aten_post)
-prior_draws <- as.matrix(mod_aten_post_prior_only)
-```
-
-
-
-#### b. plot marginal distributions for posterior and prior
-``` {r}
-# Compare marginal distributions
-dens(post_draws[, "atenolol_post"], show.zero = TRUE, col = "red", main = "Informed prior vs posterior for atenolol after intervention", xlab = "Beta coefficient for effect of atenolol after", xlim = c(-5, 4), ylim = c(0, 0.9))
-dens(prior_draws[, "atenolol_post"], add=TRUE, col = "blue", show.zero = TRUE)
-```
-
-
-
-
-#### c. compute prior tail probability of posterior mean
-If this probability is very small (e.g. < 0.05), the posterior lies in a region the prior considered implausible.
-```{r}
-beta_hat <- mean(post_draws[, "atenolol_post"])
-
-mean(abs(prior_draws[, "atenolol_post"] - beta_hat) <
-       abs(prior_draws[, "atenolol_post"] - mean(prior_draws[, "atenolol_post"])))
-
-```
-
-
-
-
-
-### 4. Sensitivity analyses to assess robustness of results to choice of prior
-#### a. create priors of different strength for s_vmaxav_vmaxpv variable
-To determine whether the substantive conclusions depend upon the exact prior choice.
-
-NB the scale variable is strengthened or weakened by multiplying or dividing the scale of the main prior by 2, respectively. The location is set to the posterior mean from the main model, to ensure that the priors are centred on a plausible value.
-NB.  Had to use 0.5, 1, and 2 to ensure that the chains all completed.
-```{r}
-priors_bin <- list(
-  weak = student_t(df = 3, location = c(1.866284, 0, 0),
-                   scale = c(3.3775394, 2, 2),
-                   autoscale = c(FALSE, TRUE, FALSE)),
-  moderate = student_t(df = 3, location = c(1.848297, 0, 0),
-                       scale = c(1.6887697, 2, 2),
-                       autoscale = c(FALSE, TRUE, FALSE)),
-  strong = student_t(df = 3, location = c(1.866284, 0, 0),
-                     scale = c(0.8443848, 2, 2),
-                     autoscale = c(FALSE, TRUE, FALSE))
-)
-```
-
-strong         0.8443848
-moderate       1.6887697
-weak           3.3775394
-
-
-
-#### b. refit model with different priors and compare results
-```{r}
-fits <- lapply(priors_bin, function(p) {
-  stan_surv(formula = Surv(time, status) ~ atenolol_post
-                      + s_tapse
-                      + atenolol_pre
-                      + (1| centre),
-            basehaz = "ms",
-            data = df_surg,
-            prior_intercept = normal(location = 0, scale = 20, autoscale = FALSE),
-            prior = p,
-            prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-            iter    = 2000,
-            chains = 4,
-            cores = 4,
-            adapt_delta = 0.99999,  # Often helpful for complex models
-            control = list(max_treedepth = 20),
-            init = 0.1,
-            seed = 666
-            )
-})
-```
-
-
-
-#### c. compare posterior intervals for hazard ratios for type_ab across different priors
-```{r}
-# calculate median hazard ratio across different priors
-HR_med_sens <- sapply(fits, function(f) {
-  posterior::as_draws_df(f) |>
-    as.data.frame() |>
-    summarise(
-      median = exp(quantile(atenolol_post, probs = 0.5))
-    )
-})
-HR_med <- c(HR_med_sens[[1]], HR_med_sens[[2]], HR_med_sens[[3]])
-
-
-# calculate 89% credible interval for hazard ratio across different priors
-HR_sens <- sapply(fits, function(f) {
-  exp(posterior_interval(f, pars = "atenolol_post", prob = 0.89))
-})
-
-# combine median and credible intervals into a summary table
-HR_sens_summary <- rbind(HR_med, HR_sens)
-row.names(HR_sens_summary) <- c("Median", "Lower", "Upper")
-
-# transpose the table for better readability
-HR_sens_summary
-```
-
-
-
-
-
-## A. Make model predictions and plot for mod_aten_post - simple effect
-### 1. Create new data where atenolol differs
-```{r}
-nd <- data.frame(centre = rep("p", 1),
-                 atenolol_post = c(0, 1),
-                 s_tapse = 0,
-                 atenolol_pre = 1
-                 )
-head(nd)
-```
-
-
-
-
-### 2. Make posterior predictions from new data
-```{r}
-ps <- posterior_survfit(mod_aten_post,
-  newdata = nd,
-  times = 0,
-  extrapolate = TRUE) |>
-  suppressWarnings()
-head(ps)
-```
-
-
-
-
-### 3. Plot
-```{r}
-panel_labels <- c('1' = "No atenolol after intervention", '2' = "Atenolol after intervention")
-pps <- plot(ps) +
-  aes(colour = factor(id), fill = factor(id)) +
-  theme(legend.position = "none") +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels)) +
-           theme(axis.title.y = element_text(size=12, face="bold"), 
-               axis.title.x = element_text(size=12, face="bold"),
-               title = element_text(size=12, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 10),
-               axis.text.y = element_text(color = "grey50",size = 10)) +
-            theme(strip.text.x = element_text(size = 10, face = "bold.italic"),
-                   strip.background = element_rect(fill="white")) +
-            scale_colour_hue(h.start = 90) +
-            scale_fill_hue(h.start = 90)
-  
-
-print(pps)
-```
-
-
-
-
-
-
-## B. Make model predictions and plot for mod_aten_post
-### 1. Create new data where atenolol differs
-```{r}
-nd <- data.frame(centre = rep("p", 4),
-                 atenolol_post = c(0, 0, 1, 1),
-                 s_tapse = rep(0, 4),
-                 atenolol_pre = c(0, 1, 0, 1)
-                 )
-head(nd)
-```
-
-
-
-
-### 2. Make posterior predictions from new data
-```{r}
-ps <- posterior_survfit(mod_aten_post,
-  newdata = nd,
-  times = 0,
-  extrapolate = TRUE) |>
-  suppressWarnings()
-head(ps)
-```
-
-
-
-
-### 3. Plot
-```{r}
-panel_labels <- c('1' = "No atenolol before or after", '2' = "Atenolol before, not after",
-                  '3' = "Atenolol after not before", '4' = "Atenolol before and after")
-pps <- plot(ps) +
-  aes(colour = factor(id), fill = factor(id)) +
-  theme(legend.position = "none") +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels)) +
-           theme(axis.title.y = element_text(size=12, face="bold"), 
-               axis.title.x = element_text(size=12, face="bold"),
-               title = element_text(size=12, face="bold"),
-               plot.title = element_text(hjust = 0.5),
-               axis.text.x = element_text(color = "grey50", size = 10),
-               axis.text.y = element_text(color = "grey50",size = 10)) +
-            theme(strip.text.x = element_text(size = 10, face = "bold.italic"),
-                   strip.background = element_rect(fill="white")
-        )
-
-print(pps)
-```
-
-
-
-
-
-## Check PH assumption visually
-### make predictions of both the hazard and log hazard
-```{r}
-ph <- suppressWarnings( posterior_survfit(mod_aten_post, newdata = nd, type = "haz") )
-pl <- suppressWarnings( posterior_survfit(mod_aten_post, newdata = nd, type = "loghaz") )
-
-```
-
-
-
-#### create plots
-```{r}
-pph <- plot(ph) +
-  coord_cartesian(ylim = c(0.0, 0.005)) +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels))
-ppl <- plot(pl) +
-  facet_wrap(~ id, labeller = labeller(id = panel_labels))
-```
-
-
-
-#### combine plots in grid and plot
-```{r, fig.width = 8, fig.height = 8}
-plot_grid(pph, ppl, ncol = 1)
-```
-
-
-
 
 
 
@@ -3586,13 +2407,14 @@ mod_clin_si <- stan_surv(formula = Surv(time, status) ~ clinical_signs
                          + (1| centre),
   data = df,
   basehaz = "ms",
-  prior_intercept = normal(location = 0, scale = 10, autoscale = FALSE),
+  prior_intercept = normal(location = 0, scale = 12.5, autoscale = FALSE),
   prior = prior_clin_si,
   prior_covariance =  decov(regularization = 2, concentration = 1, shape = 1, scale = 1),
-  iter    = 10000,
+  iter    = 12000,
+  warmup = 4000,
   chains = 4,
   cores = 4,
-  adapt_delta = 0.9999,  # Often helpful for complex models
+  adapt_delta = 0.99999,  # Often helpful for complex models
   seed = 666)
 ```
 
@@ -3647,7 +2469,7 @@ mcmc_trace(posterior_mod_clin_si)
 ```{r}
 color_scheme_set("mix-blue-pink")
 mcmc_rank_overlay(posterior_mod_clin_si) +
-  ylim(200, 300)
+  ylim(325, 500)
 ```
 
 
@@ -3698,7 +2520,9 @@ ggplot(data.frame(s_cs), aes(x = s_cs)) +
                axis.text.x = element_text(color = "grey50", size = 12),
                axis.text.y = element_text(color = "grey8",size = 12)) +
   geom_vline(xintercept = 0, linetype="dotted", 
-                color = "firebrick", linewidth = 1.5)
+                color = "firebrick", linewidth = 1.5) +
+  xlim(-0.1, 2.5) +
+  ylim(0, 2.0)
 ```
 
 
@@ -3766,7 +2590,8 @@ ggplot(data.frame(clin_si_hr), aes(x = clin_si_hr)) +
                axis.text.y = element_text(color = "grey8",size = 12)) +
   geom_vline(xintercept = 1, linetype="dotted", 
                 color = "firebrick", linewidth = 1.5) +
-  xlim(0, 10)
+  xlim(0, 10) +
+  ylim(0, 0.6)
 ```
 
 
@@ -3985,20 +2810,6 @@ plot_grid(pph, ppl, ncol = 1)
 ```
 
 
-library(tidyverse)
-library(pammtools)
-library(splines2)
-library(posterior)
-library(ggplot2)
-library(rethinking)
-library(survminer)
-library(survival)
-library(cowplot)
-library(rstanarm)
-library(bayestestR)
-library(brms)
-library(tidybayes)
-library(bayesplot)
 
 
 ## CITATIONS
