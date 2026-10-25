@@ -1,0 +1,2596 @@
+---
+title: "pulmonic_stenosis_informative_priors"
+author: "Alex German"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Load packages
+```{r, warning = F, message = F}
+library(tidyverse)
+library(pammtools)
+library(splines2)
+library(posterior)
+library(ggplot2)
+library(rethinking)
+library(survminer)
+library(survival)
+library(cowplot)
+library(rstanarm)
+library(bayestestR)
+library(brms)
+library(tidybayes)
+library(bayesplot)
+```
+
+
+
+
+
+# I. Type
+Coded as...
+•	A
+•	B
+•	Intermediate
+
+
+## 1. Previous studies for stenosis type
+
+
+Locatelli et al., JSAP 2013
+•	Valve morphology type B (thickened, hypoplastic annulus) → In whole population HR 3.33 (95%-CI 1·689-6·579)
+  Intermediate type.  No difference cf type A, though exact figures not reported.
+172 dogs
+
+
+Chetboul et al. 2018
+Did not assess type
+
+
+Bonvin (Utrecht Thesis, 2019)
+•	Valve morphology type B: poor outcome in PBV group (HR 7.026; 95%-CI 1.268-38.928)
+  Intermediate type.  No difference cf type A, though exact figures not reported.
+112 dogs
+
+
+
+Use Bayes theorum to combine the evidence from these two studies to inform the prior for the effect of type B and AB on survival in our model
+Use brm with estimate | se(error) to combine the evidence from the two studies, which allows us to use the point estimate and standard error (derived from the confidence intervals) from each study
+
+SD (=sem) = (upperCI - lowerCI) / 3.92
+
+
+
+## 1. Determine location and scale (sem) for type B
+### a. Using Locatelli
+```{r}
+median_exp_l_type <- log(3.33)
+lower_exp_l_type <- log(1.689)
+upper_exp_l_type <- log(6.579)
+range_l_type <- upper_exp_l_type - lower_exp_l_type
+scale_l_type <- range_l_type / 3.96
+prior_exp_l_type <- matrix(c(median_exp_l_type,
+                    range_l_type,
+                    scale_l_type)
+)
+colnames(prior_exp_l_type) <- "locatelli"
+rownames(prior_exp_l_type) <- c("location", "range", "scale")
+prior_exp_l_type
+```
+
+
+
+### b. Using Chetboul
+```{r}
+median_exp_c_type <- NA
+lower_exp_c_type <- NA
+upper_exp_c_type <- NA
+range_c_type <- upper_exp_c_type - lower_exp_c_type
+scale_c_type <- range_c_type / 4
+prior_exp_c_type <- matrix(c(median_exp_c_type,
+                    range_c_type,
+                    scale_c_type)
+)
+colnames(prior_exp_c_type) <- "chetboul"
+rownames(prior_exp_c_type) <- c("location", "range", "scale")
+prior_exp_c_type
+```
+
+
+
+
+### c. Using Bonvin
+```{r}
+median_exp_b_type <- log(7.026)
+lower_exp_b_type <- log(1.268)
+upper_exp_b_type <- log(38.928)
+range_b_type <- upper_exp_b_type - lower_exp_b_type
+scale_b_type <- range_b_type / 3.96
+prior_exp_b_type <- matrix(c(median_exp_b_type,
+                    range_b_type,
+                    scale_b_type)
+)
+colnames(prior_exp_b_type) <- "bonvin"
+rownames(prior_exp_b_type) <- c("location", "range", "scale")
+prior_exp_b_type
+```
+
+
+
+
+
+## 2. Set very weak neutral regularising prior 
+very small datasets (1-3 values) , so prior could impact on the posterior significantly.  Therefore, set scale to 10, make prior virtually flat but not uniform.
+```{r}
+prior_type <- set_prior("normal(0, 10)", class = "b", coef = "Intercept")
+```
+
+
+
+## 3. Create a dataframe for the likelihood based on the Locatelli and Bonvin studies
+```{r}
+df_type <- data.frame(
+  estimate = c(median_exp_l_type, median_exp_c_type, median_exp_b_type), # Observed scale for all studies
+  error = c(scale_l_type, scale_c_type, scale_b_type)      # Observed SD (Standard Error) for all studies
+)
+```
+
+
+
+## 4. Run model
+```{r}
+set.seed(999)
+model_type <- brm(estimate | se(error) ~ 0 + Intercept,
+                   family = gaussian(),
+                   data = df_type,
+                   prior = prior_type,
+                   control=list(adapt_delta=0.98),
+                   iter = 2000, warmup = 1000,
+                   save_pars = save_pars(all =TRUE),
+                   sample_prior = TRUE)
+```
+
+
+
+## View MCMC trace plots
+```{r}
+color_scheme_set("mix-blue-pink")
+posterior_model_type <- as.array(model_type)
+mcmc_trace(posterior_model_type)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+color_scheme_set("viridis")
+mcmc_rank_overlay(posterior_model_type) +
+  ylim(0, 100)
+```
+
+
+
+
+## 5. get summary of model
+```{r}
+summary(model_type)
+```
+
+## 6. Get location (median estimate) and scale (SD)
+```{r}
+draws <- as.matrix(model_type)
+location_type <- mean(draws[,1]) # draws for type_b
+scale_type <- sd(draws[,1])
+location_type
+scale_type
+```
+
+
+
+## 7. Compare prior and posterior
+```{r}
+plot(hypothesis(model_type, "Intercept = 0"))
+```
+
+
+
+
+## 8. Decision...
+Set an informative prior...
+ ~ student_t(df = 3, location = 1.292032, scale = 0.3219278)
+
+
+### a. Prior for beta of type
+```{r}
+prior_beta_type <- student_t(df = 3, location = location_type, scale = scale_type, autoscale = FALSE)
+```
+
+
+
+### b. Suggested scales assuming strong, moderate and weak priors.
+Given such a small scale, best to adjust the strong prior is based on the combined estimate from the literature, whilst moderate and weak priors are then scaled up from the strong prior.  These latter priors ensure that the data are not overwhelmed by the prior, but still allow for some regularisation to improve model convergence and reduce overfitting.
+Therefore, strong prior should be 1x the combine scale, then increase this by 2x for moderate and 4x for weak.
+```{r}
+strong_scale <- scale_type
+moderate_scale <- strong_scale * 2
+weak_scale <- strong_scale * 4
+
+prior_scale_type <- matrix(c(strong_scale,
+                        moderate_scale,
+                        weak_scale)
+)
+colnames(prior_scale_type) <- "suggested scale"
+rownames(prior_scale_type) <- c("strong", "moderate", "weak")
+prior_scale_type
+```
+
+
+
+### c. Priors bin
+```{r}
+priors_bin_type <- list(
+  weak = student_t(df = 3, location = location_type, scale = weak_scale, autoscale = TRUE),
+  moderate = student_t(df = 3, location = location_type, scale = moderate_scale, autoscale = TRUE),
+  strong = student_t(df = 3, location = location_type, scale = strong_scale, autoscale = TRUE)
+)
+```
+
+
+
+
+
+## 9. Plot comparison of study distribution vs. posterior
+### a. Generate posterior for plotting
+```{r}
+# 1. Extract the Posterior and Prior draws
+draws <- model_type %>%
+  spread_draws(b_Intercept) %>%
+  dplyr::rename(Posterior = b_Intercept) %>%
+  pivot_longer(cols = Posterior, names_to = "Source", values_to = "Value")
+
+# 2. Define the Likelihood parameters (from Locatelli study)
+locatelli_med <- median_exp_l_type
+locatelli_se   <- scale_l_type 
+
+# 3. Define the Likelihood parameters (from Chetboul study)
+chetboul_med <- median_exp_c_type
+chetboul_se   <- scale_c_type 
+
+# 4. Define the Likelihood parameters (from Bonvin study)
+bonvin_med <- median_exp_b_type
+bonvin_se   <- scale_b_type 
+```
+
+
+
+### b. Create the density plot
+```{r}
+# Create the Plot
+ggplot() +
+  # LAYER 1: Posterior (from your HMC draws)
+  geom_density(
+    data = draws, 
+    aes(x = Value), 
+    alpha = 0.7,
+    color = "black",
+    linewidth = 1
+  ) +
+
+  
+  # LAYER 2: Distribution from Locatelli (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(locatelli_med - 3.92 * locatelli_se, locatelli_med + 3.92 * locatelli_se)), 
+    aes(x = Value, fill = "Locatelli"),
+    fun = dnorm, 
+    args = list(mean = locatelli_med , sd = locatelli_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+
+   # LAYER 3: Distribution from Chetboul (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(chetboul_med - 3.92 * chetboul_se, chetboul_med + 3.92 * chetboul_se)), 
+    aes(x = Value, fill = "Chetboul"),
+    fun = dnorm, 
+    args = list(mean = chetboul_med, sd = chetboul_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) + 
+
+    # LAYER 4: Distribution from Bonvin (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(bonvin_med - 3.92 * bonvin_se, bonvin_med + 3.92 * bonvin_se)), 
+    aes(x = Value, fill = "Bonvin"),
+    fun = dnorm, 
+    args = list(mean = bonvin_med, sd = bonvin_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +  
+  
+    
+  # Styling the Colors
+  scale_fill_manual(
+    values = c(
+      "Locatelli" = "#F8766D",
+      "Chetboul" = "#619CFF",
+      "Bonvin" = "#00BA38"
+    )
+  ) +
+  labs(
+    title = "Informed prior for effect of type B on survival",
+    subtitle = "Visualising how the Posterior reconciles Locatelli and Bonvin",
+    x = "Effect Estimate",
+    y = "Density",
+    fill = "Component"
+  ) +
+  theme_bw() +
+  theme(legend.position = c(0.9, 0.8)) +
+  labs(fill = "Study") +
+
+           theme(axis.title.y = element_text(size=12, face="bold"), 
+               axis.title.x = element_text(size=12, face="bold"),
+               plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+               plot.subtitle = element_text(size = 12, hjust = 0.5, face = "italic"),
+               axis.text.x = element_text(color = "grey50", size = 10),
+               axis.text.y = element_text(color = "grey50",size = 10)) +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# II. Age (in months)
+Coded as...
+•	Standardised
+•	SD = 19.4778645
+•	mean 18 months, median 11 months, range 2 to 132 months
+
+
+## Previous studies for age
+
+Chetboul et al
+•	Age (years) — HR = 2.3 per 1-year increase, p = 0.02... 
+•	(Older age at diagnosis associated with shorter time to cardiac death).
+2.3 (per 1 year increase; 95% CI¼ 1.2-4.4; p= 0.02)
+
+
+Scansen
+•	Younger age at diagnosis (discussed as suggesting more severe disease in some contexts) — presented as a factor clinicians consider for earlier intervention (not shown as a quantified HR in the review).
+
+Locatelli et al., JSAP 2013
+•	Younger age at diagnosis (<1 year) → poorer survival.
+dogs <1y HR 3·96 (1·837-8·307)
+No average age stated, so assume this is ~2 SD away from the mean
+That way age effect per year would be...
+### Invert HRs to get change per SD age
+```{r}
+# mean
+1/3.96
+
+# lower 95%-CI
+1/8.307
+
+# upper 95%-CI
+1/1.837
+```
+
+Bonvin
+Found a linear increase in HR per month of age as 1.020 (1.001-1.039)
+
+
+
+
+## Determine coefficient for age
+### a. Using Locatelli
+NB Assume <12 months is a 1 SD change from location
+```{r}
+median_exp_l_age <- log(0.2525253)
+lower_exp_l_age <- log(0.1203804)
+upper_exp_l_age <- log(0.5443658)
+range_l_age <- upper_exp_l_age - lower_exp_l_age
+scale_l_age <- range_l_age / 3.96
+prior_exp_l_age <- matrix(c(median_exp_l_age,
+                    range_l_age,
+                    scale_l_age)
+)
+colnames(prior_exp_l_age) <- "locatelli"
+rownames(prior_exp_l_age) <- c("location", "range", "scale")
+prior_exp_l_age
+```
+
+
+
+
+
+### b. Using Chetboul
+```{r}
+median_exp_c_age <- log(2.3 ^ (19/12))
+lower_exp_c_age <- log(1.2 ^ (19/12))
+upper_exp_c_age <- log(4.4 ^ (19/12))
+range_c_age <- upper_exp_c_age - lower_exp_c_age
+scale_c_age <- range_c_age / 3.96
+prior_exp_c_age <- matrix(c(median_exp_c_age,
+                    range_c_age,
+                    scale_c_age)
+)
+colnames(prior_exp_c_age) <- "chetboul"
+rownames(prior_exp_c_age) <- c("location", "range", "scale")
+prior_exp_c_age
+```
+
+
+
+### c. Using Bonvin
+HRs presented per month of age
+Need to standardise to 1 SD of current study which is 19 months
+Therefore, multiply by 19
+```{r}
+median_exp_b_age <- log(1.020 ^ 19)
+lower_exp_b_age <- log(1.001 ^ 19)
+upper_exp_b_age <- log(1.039 ^ 19)
+range_b_age <- upper_exp_b_age - lower_exp_b_age
+scale_b_age <- range_b_age / 3.96 
+prior_exp_b_age <- matrix(c(median_exp_b_age,
+                    range_b_age,
+                    scale_b_age)
+)
+colnames(prior_exp_b_age) <- "bonvin"
+rownames(prior_exp_b_age) <- c("location", "range", "scale")
+prior_exp_b_age
+```
+
+
+
+## 2. Set very weak neutral regularising prior 
+very small datasets (1-3 values) , so prior could impact on the posterior significantly.  Therefore, set scale to 10, make prior virtually flat but not uniform.
+```{r}
+prior_age <- set_prior("normal(0, 10)", class = "b", coef = "Intercept")
+```
+
+
+
+## 3. Create a dataframe for the likelihood based on the Chetboul study
+```{r}
+df_age <- data.frame(
+  estimate = c(median_exp_l_age, median_exp_c_age, median_exp_b_age), # Observed scales for all studies
+  error = c(scale_l_age, scale_c_age, scale_b_age)      # Observed SD (Standard Error) for all studies
+  )
+```
+
+
+
+## 4. Run model
+```{r}
+set.seed(999)
+model_age <- brm(estimate | se(error) ~ 0 + Intercept,
+                   family = gaussian(),
+                   data = df_age,
+                   prior = prior_age,
+                   control=list(adapt_delta=0.98),
+                   iter = 2000, warmup = 1000,
+                   save_pars = save_pars(all =TRUE),
+                   sample_prior = TRUE)
+```
+
+
+
+## View MCMC trace plots
+```{r}
+color_scheme_set("mix-blue-pink")
+posterior_model_age <- as.array(model_age)
+mcmc_trace(posterior_model_age)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+color_scheme_set("viridis")
+mcmc_rank_overlay(posterior_model_age) +
+  ylim(0, 100)
+```
+
+
+
+
+## 5. get summary of model
+```{r}
+summary(model_age)
+```
+
+
+
+
+
+## 6. Get location (median estimate) and scale (SD)
+```{r}
+draws <- as.matrix(model_age)
+location_age <- mean(draws[,1]) # draws for type
+scale_age <- sd(draws[,1])
+location_age
+scale_age
+```
+
+
+
+
+
+## 7. Compare prior and posterior
+```{r}
+plot(hypothesis(model_age, "Intercept = 0"))
+```
+
+
+
+## 8. Decision...
+Set an informative prior...
+ ~ student_t(df = 3, location = 0.1731489, scale = 0.1596095)
+
+
+
+### a. Prior for beta of age
+```{r}
+prior_beta_age <- student_t(df = 3, location = location_age, scale = scale_age, autoscale = TRUE)
+```
+
+
+
+
+### b. Suggested scales assuming strong, moderate and weak priors.
+Given such a small scale, best to adjustThe strong prior is based on the combined estimate from the literature, whilst moderate and weak priors are then scaled up from the strong prior.  These latter priors ensure that the data are not overwhelmed by the prior, but still allow for some regularisation to improve model convergence and reduce overfitting.
+Therefore, strong prior should be 1x the combine scale, then increase this by 2.5x for moderate and 5x for weak.
+```{r}
+strong_scale <- scale_age
+moderate_scale <- strong_scale * 2
+weak_scale <- strong_scale * 4
+
+prior_scale_age <- matrix(c(strong_scale,
+                        moderate_scale,
+                        weak_scale)
+)
+colnames(prior_scale_age) <- "suggested scale"
+rownames(prior_scale_age) <- c("strong", "moderate", "weak")
+prior_scale_age
+```
+
+
+
+### c. Priors bin
+```{r}
+priors_bin_age <- list(
+  weak = student_t(df = 3, location = location_age, scale = weak_scale, autoscale = TRUE),
+  moderate = student_t(df = 3, location = location_age, scale = moderate_scale, autoscale = TRUE),
+  strong = student_t(df = 3, location = location_age, scale = strong_scale, autoscale = TRUE)
+)
+```
+
+
+
+
+
+
+## 9. Plot comparison of study distribution vs. posterior
+### a. Generate posterior for plotting
+```{r}
+# 1. Extract the Posterior and Prior draws
+draws <- model_age %>%
+  spread_draws(b_Intercept) %>%
+  dplyr::rename(Posterior = b_Intercept) %>%
+  pivot_longer(cols = Posterior, names_to = "Source", values_to = "Value")
+
+# 2. Define the Likelihood parameters (from Locatelli study)
+locatelli_med <- median_exp_l_age
+locatelli_se   <- scale_l_age
+
+# 3. Define the Likelihood parameters (from Chetboul study)
+chetboul_med <- median_exp_c_age
+chetboul_se   <- scale_c_age
+
+# 4. Define the Likelihood parameters (from Bonvin study)
+bonvin_med <- median_exp_b_age
+bonvin_se   <- scale_b_age
+```
+
+
+
+### b. Create the density plot
+```{r}
+# Create the Plot
+ggplot() +
+  # LAYER 1: Posterior (from your HMC draws)
+  geom_density(
+    data = draws, 
+    aes(x = Value), 
+    alpha = 0.7,
+    color = "black",
+    linewidth = 1
+  ) +
+
+  
+  # LAYER 2: Distribution from Locatelli (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(locatelli_med - 3.92 * locatelli_se, locatelli_med + 3.92 * locatelli_se)), 
+    aes(x = Value, fill = "Locatelli"),
+    fun = dnorm, 
+    args = list(mean = locatelli_med , sd = locatelli_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+
+   # LAYER 3: Distribution from Chetboul (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(chetboul_med - 3.92 * chetboul_se, chetboul_med + 3.92 * chetboul_se)), 
+    aes(x = Value, fill = "Chetboul"),
+    fun = dnorm, 
+    args = list(mean = chetboul_med, sd = chetboul_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) + 
+
+    # LAYER 4: Distribution from Bonvin (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(bonvin_med - 3.92 * bonvin_se, bonvin_med + 3.92 * bonvin_se)), 
+    aes(x = Value, fill = "Bonvin"),
+    fun = dnorm, 
+    args = list(mean = bonvin_med, sd = bonvin_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +  
+  
+    
+  # Styling the Colors
+  scale_fill_manual(
+    values = c(
+      "Locatelli" = "#F8766D",
+      "Chetboul" = "#619CFF",
+      "Bonvin" = "#00BA38"
+    )
+  ) +
+  labs(
+    title = "Informed prior for effect of age on survival",
+    subtitle = "Visualising how the Posterior reconciles Locatelli, Chetboul and Bonvin",
+    x = "Effect Estimate",
+    y = "Density",
+    fill = "Component"
+  ) +
+  theme_bw() +
+  theme(legend.position = c(0.9, 0.8)) +
+  labs(fill = "Study") +
+
+           theme(axis.title.y = element_text(size=12, face="bold"), 
+               axis.title.x = element_text(size=12, face="bold"),
+               plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+               plot.subtitle = element_text(size = 12, hjust = 0.5, face = "italic"),
+               axis.text.x = element_text(color = "grey50", size = 10),
+               axis.text.y = element_text(color = "grey50",size = 10)) +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+
+# III. Surgery
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+
+## 1, Previous studies for surgery
+
+Locatelli et al., JSAP 2013
+•	Treatment effect: PBV improved survival in severe PS; asymptomatic moderate PS also had better outcomes.
+balloon valvuloplasty (HR 0·47, P=0·047) 
+no BVP in severe PS (HR 2·11, 95%CI 1·011-4·396) 
+Inverse are HRs for BVP (nb severe PS)...
+```{r}
+1/2.11
+1/1.011
+1/4.396
+```
+Therefore, HR of 0.47 for use of bv in severe PS, and HR of 0.23 to 0.99 for use of bv in moderate PS.
+
+
+
+
+Bonvin (Utrecht Thesis, 2019)
+•	PBV treatment: protective factor, significantly prolongs survival in severe PS
+Severe and moderate BBP... HR 0.339 (0.135-0.854)
+
+
+
+
+
+
+## Coefficient for surgery
+### a. Using Locatelli
+```{r}
+median_exp_l_sx <- log(0.4739336)
+lower_exp_l_sx <- log(0.2274795)
+upper_exp_l_sx <- log(0.9891197)
+range_l_sx <- upper_exp_l_sx - lower_exp_l_sx
+scale_l_sx <- range_l_sx / 3.92
+prior_exp_l_sx <- matrix(c(median_exp_l_sx,
+                    range_l_sx,
+                    scale_l_sx)
+)
+colnames(prior_exp_l_sx) <- "locatelli"
+rownames(prior_exp_l_sx) <- c("location", "range", "scale")
+prior_exp_l_sx
+```
+
+
+
+### b. Using Chetboul
+```{r}
+median_exp_c_sx <- NA
+lower_exp_c_sx <- NA
+upper_exp_c_sx <- NA
+range_c_sx <- upper_exp_c_sx - lower_exp_c_sx
+scale_c_sx <- range_c_sx / 4
+prior_exp_c_sx <- matrix(c(median_exp_c_sx,
+                    range_c_sx,
+                    scale_c_sx)
+)
+colnames(prior_exp_c_sx) <- "chetboul"
+rownames(prior_exp_c_sx) <- c("location", "range", "scale")
+prior_exp_c_sx
+```
+
+
+
+### b. Using Bonvin
+```{r}
+median_exp_b_sx <- log(0.339)
+lower_exp_b_sx <- log(0.135)
+upper_exp_b_sx <- log(0.854)
+range_b_sx <- upper_exp_b_sx - lower_exp_b_sx
+scale_b_sx <- range_b_sx / 3.92
+prior_exp_b_sx <- matrix(c(median_exp_b_sx,
+                    range_b_sx,
+                    scale_b_sx)
+)
+colnames(prior_exp_b_sx) <- "bonvin"
+rownames(prior_exp_b_sx) <- c("location", "range", "scale")
+prior_exp_b_sx
+```
+
+
+
+## 2. Set very weak neutral regularising prior 
+very small datasets (1-3 values) , so prior could impact on the posterior significantly.  Therefore, set scale to 10, make prior virtually flat but not uniform.
+```{r}
+prior_sx <- set_prior("normal(0, 10)", class = "b", coef = "Intercept")
+```
+
+
+
+
+## 3. Create a dataframe for the likelihood based on the three studies
+```{r}
+df_sx <- data.frame(
+  estimate = c(median_exp_l_sx, median_exp_c_sx, median_exp_b_sx), # Observed scales for all studies
+  error = c(scale_l_sx, scale_c_sx, scale_b_sx)      # Observed SD (Standard Error) for all studies
+)
+```
+
+
+
+
+## 4. Run model
+```{r}
+set.seed(999)
+model_sx <- brm(estimate | se(error) ~ 0 + Intercept,
+                   family = gaussian(),
+                   data = df_sx,
+                   prior = prior_sx,
+                   control=list(adapt_delta=0.98),
+                   iter = 2000, warmup = 1000,
+                   save_pars = save_pars(all =TRUE),
+                   sample_prior = TRUE)
+```
+
+
+
+## View MCMC trace plots
+```{r}
+color_scheme_set("mix-blue-pink")
+posterior_model_sx <- as.array(model_sx)
+mcmc_trace(posterior_model_sx)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+color_scheme_set("viridis")
+mcmc_rank_overlay(posterior_model_sx) +
+  ylim(0, 100)
+```
+
+
+
+
+## 5. get summary of model
+```{r}
+summary(model_sx)
+```
+
+
+
+
+## 6. Get location (median estimate) and scale (SD)
+```{r}
+draws <- as.matrix(model_sx)
+location_sx <- mean(draws[,1]) # draws for surgery
+scale_sx <- sd(draws[,1])
+location_sx
+scale_sx
+```
+
+
+
+
+## 7. Compare prior and posterior
+```{r}
+plot(hypothesis(model_sx, "Intercept = 0"))
+```
+
+
+
+
+## 8. Decision...
+Set an informative prior...
+ ~ student_t(df = 3, location = -0.879165, scale = 0.2911939)
+
+
+
+### a. Prior for beta of surgery
+```{r}
+prior_beta_sx <- student_t(df = 3, location = location_sx, scale = scale_sx, autoscale = TRUE)
+```
+
+
+
+
+### b. Suggested scales assuming strong, moderate and weak priors.
+Given such a small scale, best to adjustThe strong prior is based on the combined estimate from the literature, whilst moderate and weak priors are then scaled up from the strong prior.  These latter priors ensure that the data are not overwhelmed by the prior, but still allow for some regularisation to improve model convergence and reduce overfitting.
+Therefore, strong prior should be 1x the combine scale, then increase this by 2.5x for moderate and 5x for weak.
+```{r}
+strong_scale <- scale_sx
+moderate_scale <- strong_scale * 2
+weak_scale <- strong_scale * 4
+
+prior_scale_sx <- matrix(c(strong_scale,
+                        moderate_scale,
+                        weak_scale)
+)
+colnames(prior_scale_sx) <- "suggested scale"
+rownames(prior_scale_sx) <- c("strong", "moderate", "weak")
+prior_scale_sx
+```
+
+
+
+### c. Priors bin
+```{r}
+priors_bin_sx <- list(
+  weak = student_t(df = 3, location = location_sx, scale = weak_scale, autoscale = TRUE),
+  moderate = student_t(df = 3, location = location_sx, scale = moderate_scale, autoscale = TRUE),
+  strong = student_t(df = 3, location = location_sx, scale = strong_scale, autoscale = TRUE)
+)
+```
+
+
+
+
+## 9. Plot comparison of study distribution vs. posterior
+### a. Generate posterior for plotting
+```{r}
+# 1. Extract the Posterior and Prior draws
+draws <- model_sx %>%
+  spread_draws(b_Intercept) %>%
+  dplyr::rename(Posterior = b_Intercept) %>%
+  pivot_longer(cols = Posterior, names_to = "Source", values_to = "Value")
+
+# 2. Define the Likelihood parameters (from Locatelli study)
+locatelli_med <- median_exp_l_sx
+locatelli_se   <- scale_l_sx
+
+# 3. Define the Likelihood parameters (from Chetboul study)
+chetboul_med <- median_exp_c_sx
+chetboul_se   <- scale_c_sx
+
+# 4. Define the Likelihood parameters (from Bonvin study)
+bonvin_med <- median_exp_b_sx
+bonvin_se   <- scale_b_sx
+```
+
+
+
+### b. Create the density plot
+```{r}
+# Create the Plot
+ggplot() +
+  # LAYER 1: Posterior (from your HMC draws)
+  geom_density(
+    data = draws, 
+    aes(x = Value), 
+    alpha = 0.7,
+    color = "black",
+    linewidth = 1
+  ) +
+
+  
+  # LAYER 2: Distribution from Locatelli (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(locatelli_med - 3.96*locatelli_se, locatelli_med + 3.96*locatelli_se)), 
+    aes(x = Value, fill = "Locatelli"),
+    fun = dnorm, 
+    args = list(mean = locatelli_med , sd = locatelli_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+
+   # LAYER 3: Distribution from Chetboul (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(chetboul_med - 3.96 * chetboul_se, chetboul_med + 3.96 * chetboul_se)), 
+    aes(x = Value, fill = "Chetboul"),
+    fun = dnorm, 
+    args = list(mean = chetboul_med, sd = chetboul_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) + 
+
+    # LAYER 4: Distribution from Bonvin (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(bonvin_med - 3.96 * bonvin_se, bonvin_med + 3.96 * bonvin_se)), 
+    aes(x = Value, fill = "Bonvin"),
+    fun = dnorm, 
+    args = list(mean = bonvin_med, sd = bonvin_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +  
+  
+    
+  # Styling the Colors
+  scale_fill_manual(
+    values = c(
+      "Locatelli" = "#F8766D",
+      "Chetboul" = "#619CFF",
+      "Bonvin" = "#00BA38"
+    )
+  ) +
+  labs(
+    title = "Informed prior for effect of intervention on survival",
+    subtitle = "Visualising how the Posterior reconciles Locatell and Bonvin",
+    x = "Effect Estimate",
+    y = "Density",
+    fill = "Component"
+  ) +
+  theme_bw() +
+  theme(legend.position = c(0.9, 0.8)) +
+  labs(fill = "Study") +
+
+           theme(axis.title.y = element_text(size=12, face="bold"), 
+               axis.title.x = element_text(size=12, face="bold"),
+               plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+               plot.subtitle = element_text(size = 12, hjust = 0.5, face = "italic"),
+               axis.text.x = element_text(color = "grey50", size = 10),
+               axis.text.y = element_text(color = "grey50",size = 10)) +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# IV. RV SYSTOLIC DYSFUNCTION (tapse)
+Coded as...
+•	Standardised
+•	SD = 3.5080085
+
+Scansen
+•	Severe RV hypertrophy / RV systolic dysfunction — cited as an indicator of greater disease severity and as part of criteria favoring intervention.
+
+## Decision...
+As no clear indication of effect, set a neutral, weakly-
+regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.5)
+
+
+
+
+
+
+
+
+
+
+# V. PRESSURE GRADIENT (pv_max_pg)
+Coded as...
+•	Standardised
+•	SD = 40.9438358
+
+
+## 1. Previous studies about pressure gradient
+
+
+Scansen, Advances in the Treatment of Pulmonary Valve Stenosis
+•	High transpulmonary pressure gradient higher gradients linked to worse prognosis and are used to justify intervention.
+
+
+
+### a. Using Locatelli
+•	Pulmonary Doppler gradient in dogs not having balloon valvuloplasty: higher DG = worse survival
+Moderate PS... HR 1·02 (95%-CI 1·009-1·032) per mmHg increase in pressure gradient
+
+1SD in the current study is 40.9438358 mmHg, so HR per 1 SD increase in pressure gradient would be..
+```{r}
+median_exp_l_pv <- log(1.02 ^ 40.9438358)
+lower_exp_l_pv <- log(1.009 ^ 40.9438358)
+upper_exp_l_pv <- log(1.032 ^ 40.9438358)
+range_l_pv <- upper_exp_l_pv - lower_exp_l_pv
+scale_l_pv <- range_l_pv / 3.92
+prior_exp_l_pv <- matrix(c(median_exp_l_pv,
+                    range_l_pv,
+                    scale_l_pv)
+)
+colnames(prior_exp_l_pv) <- "locatelli"
+rownames(prior_exp_l_pv) <- c("location", "range", "scale")
+prior_exp_l_pv
+```
+
+
+
+### b. Using Chetboul 2018
+Journal of Veterinary Cardiology (2018) 20, 405e414
+
+•	Pulmonary Doppler gradient: higher DG = worse survival
+HR 1.2 (95%-CI 1.0-1.3) per 10 mmHg increase in pressure gradient
+NB per 10 mmHg so multiply by 4.09438358 and NOT 40.9438358
+```{r}
+median_exp_c_pv <- log(1.2 ^ 4.09438358)
+lower_exp_c_pv <- log(1.0 ^ 4.09438358)
+upper_exp_c_pv <- log(1.3 ^ 4.09438358)
+range_c_pv <- upper_exp_c_pv - lower_exp_c_pv
+scale_c_pv <- range_c_pv / 3.92
+prior_exp_c_pv <- matrix(c(median_exp_c_pv,
+                    range_c_pv,
+                    scale_c_pv)
+)
+colnames(prior_exp_c_pv) <- "chetboul"
+rownames(prior_exp_c_pv) <- c("location", "range", "scale")
+prior_exp_c_pv
+```
+
+
+
+### c. Using Bonvin (Utrecht Thesis, 2019)
+•	Pulmonary Doppler gradient: higher DG = worse survival
+Moderate PS... HR 1.012 (95%-CI 1.001-1.023) per mmHg increase in pressure gradient
+Severe PS... HR 1.013 (95%-CI 1.001-1.026) per mmHg increase in pressure gradient
+
+1SD in the current study is 40.9438358 mmHg, so HR per 1 SD increase in pressure gradient would be..
+```{r}
+median_exp_b_pv <- log(1.0125 ^ 40.9438358)
+lower_exp_b_pv <- log(1.001 ^ 40.9438358)
+upper_exp_b_pv <- log(1.0245 ^ 40.9438358)
+range_b_pv <- upper_exp_b_pv - lower_exp_b_pv
+scale_b_pv <- range_b_pv / 3.92
+prior_exp_b_pv <- matrix(c(median_exp_b_pv,
+                    range_b_pv,
+                    scale_b_pv)
+)
+colnames(prior_exp_b_pv) <- "bonvin"
+rownames(prior_exp_b_pv) <- c("location", "range", "scale")
+prior_exp_b_pv
+```
+
+
+
+## 2. Set very weak neutral regularising prior 
+very small datasets (1-3 values) , so prior could impact on the posterior significantly.  Therefore, set scale to 10, make prior virtually flat but not uniform.
+```{r}
+prior_pv <- set_prior("normal(0, 10)", class = "b", coef = "Intercept")
+```
+
+
+
+
+## 3. Create a dataframe for the likelihood based on the Chetboul study
+```{r}
+df_pv <- data.frame(
+  estimate = c(median_exp_l_pv, median_exp_c_pv, median_exp_b_pv), # Observed scales for all studies
+  error = c(scale_l_pv, scale_c_pv, scale_b_pv)      # Observed SD (Standard Error) for all studies
+)
+```
+
+
+
+
+
+## 4. Run model
+```{r}
+set.seed(999)
+model_pv <- brm(estimate | se(error) ~ 0 + Intercept,
+                   family = gaussian(),
+                   data = df_pv,
+                   prior = prior_pv,
+                   control=list(adapt_delta=0.98),
+                   iter = 2000, warmup = 1000,
+                   save_pars = save_pars(all =TRUE),
+                   sample_prior = TRUE)
+```
+
+
+
+## View MCMC trace plots
+```{r}
+color_scheme_set("mix-blue-pink")
+posterior_model_pv <- as.array(model_pv)
+mcmc_trace(posterior_model_pv)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+color_scheme_set("viridis")
+mcmc_rank_overlay(posterior_model_pv) +
+  ylim(0, 100)
+```
+
+
+
+
+## 5. get summary of model
+```{r}
+summary(model_pv)
+```
+
+
+
+
+
+## 6. Get location (median estimate) and scale (SD)
+```{r}
+draws <- as.matrix(model_pv)
+location_pv <- mean(draws[,1]) # draws for type
+scale_pv <- sd(draws[,1])
+location_pv
+scale_pv
+```
+
+
+
+## 7. Compare prior and posterior
+```{r}
+plot(hypothesis(model_pv, "Intercept = 0"))
+```
+
+
+
+## 8. Decision...
+Set an informative prior...
+ ~ student_t(df = 3, location = 0.687753, scale = 0.1460131)
+
+
+### a. Prior for beta of pv_max
+```{r}
+prior_beta_pv <- student_t(df = 3, location = location_pv, scale = scale_pv, autoscale = TRUE)
+```
+
+
+
+
+### b. Suggested scales assuming strong, moderate and weak priors.
+Given such a small scale, best to adjustThe strong prior is based on the combined estimate from the literature, whilst moderate and weak priors are then scaled up from the strong prior.  These latter priors ensure that the data are not overwhelmed by the prior, but still allow for some regularisation to improve model convergence and reduce overfitting.
+Therefore, strong prior should be 1x the combine scale, then increase this by 2.5x for moderate and 5x for weak.
+```{r}
+strong_scale <- scale_pv
+moderate_scale <- strong_scale * 2
+weak_scale <- strong_scale * 4
+
+prior_scale_pv <- matrix(c(strong_scale,
+                        moderate_scale,
+                        weak_scale)
+)
+colnames(prior_scale_pv) <- "suggested scale"
+rownames(prior_scale_pv) <- c("strong", "moderate", "weak")
+prior_scale_pv
+```
+
+
+
+### c. Priors bin
+```{r}
+priors_bin_pv <- list(
+  weak = student_t(df = 3, location = location_pv, scale = weak_scale, autoscale = TRUE),
+  moderate = student_t(df = 3, location = location_pv, scale = moderate_scale, autoscale = TRUE),
+  strong = student_t(df = 3, location = location_pv, scale = strong_scale, autoscale = TRUE)
+)
+```
+
+
+
+
+
+
+## 9. Plot comparison of study distribution vs. posterior
+### a. Generate posterior for plotting
+```{r}
+# 1. Extract the Posterior and Prior draws
+draws <- model_pv %>%
+  spread_draws(b_Intercept) %>%
+  dplyr::rename(Posterior = b_Intercept) %>%
+  pivot_longer(cols = Posterior, names_to = "Source", values_to = "Value")
+
+# 2. Define the Likelihood parameters (from Locatelli study)
+locatelli_med <- median_exp_l_pv
+locatelli_se   <- scale_l_pv
+
+# 3. Define the Likelihood parameters (from Chetboul study)
+chetboul_med <- median_exp_c_pv
+chetboul_se   <- scale_c_pv
+
+# 4. Define the Likelihood parameters (from Bonvin study)
+bonvin_med <- median_exp_b_pv
+bonvin_se   <- scale_b_pv
+```
+
+
+
+
+### b. Create the density plot
+```{r}
+# Create the Plot
+ggplot() +
+  # LAYER 1: Posterior (from your HMC draws)
+  geom_density(
+    data = draws, 
+    aes(x = Value), 
+    alpha = 0.7,
+    color = "black",
+    linewidth = 1
+  ) +
+
+  
+  # LAYER 2: Distribution from Locatelli (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(locatelli_med - 3.96*locatelli_se, locatelli_med + 3.96*locatelli_se)), 
+    aes(x = Value, fill = "Locatelli"),
+    fun = dnorm, 
+    args = list(mean = locatelli_med , sd = locatelli_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+
+   # LAYER 3: Distribution from Chetboul (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(chetboul_med - 3.96 * chetboul_se, chetboul_med + 3.96 * chetboul_se)), 
+    aes(x = Value, fill = "Chetboul"),
+    fun = dnorm, 
+    args = list(mean = chetboul_med, sd = chetboul_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) + 
+
+    # LAYER 4: Distribution from Bonvin (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(bonvin_med - 3.96 * bonvin_se, bonvin_med + 3.96 * bonvin_se)), 
+    aes(x = Value, fill = "Bonvin"),
+    fun = dnorm, 
+    args = list(mean = bonvin_med, sd = bonvin_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +  
+  
+    
+  # Styling the Colors
+  scale_fill_manual(
+    values = c(
+      "Locatelli" = "#F8766D",
+      "Chetboul" = "#619CFF",
+      "Bonvin" = "#00BA38"
+    )
+  ) +
+  labs(
+    title = "Informed prior for effect of pressure gradient on survival",
+    subtitle = "Visualising how the Posterior reconciles Locatell, Chetboul and Bonvin",
+    x = "Effect Estimate",
+    y = "Density",
+    fill = "Component"
+  ) +
+  theme_bw() +
+  theme(legend.position = c(0.9, 0.8)) +
+  labs(fill = "Study") +
+
+           theme(axis.title.y = element_text(size=12, face="bold"), 
+               axis.title.x = element_text(size=12, face="bold"),
+               plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+               plot.subtitle = element_text(size = 12, hjust = 0.5, face = "italic"),
+               axis.text.x = element_text(color = "grey50", size = 10),
+               axis.text.y = element_text(color = "grey50",size = 10)) +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+# VI. NFD (vtiao_vtipv)
+Coded as...
+•	Standardised
+•	SD = 0.2075744
+
+Scansen, Advances in the Treatment of Pulmonary Valve Stenosis
+•	Annular hypoplasia (Ao:PV > 1.2) — predicts poorer BPV success; often indicates consideration of stent implantation instead of BPV.
+
+However, no survival analysis completed and, therefore, best to leave as a neutral prior.
+
+## Decision...
+Set a neutral, weakly-regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.0)
+
+
+
+
+
+
+
+
+
+
+# VII. NFD (vmaxav_vmaxpv)
+Coded as...
+•	Standardised
+•	SD = 0.2381948
+
+Scansen, Advances in the Treatment of Pulmonary Valve Stenosis
+•	Annular hypoplasia (Ao:PV > 1.2) — predicts poorer BPV success; often indicates consideration of stent implantation instead of BPV.
+
+
+## Decision...
+Set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.0)
+
+
+
+
+
+
+
+
+
+
+
+# VIII. RV HYPERTROPHY (ed_rvfw)
+Coded as...
+•	Standardised
+•	SD = 2.8394691
+
+Scansen
+•	Severe RV hypertrophy / RV systolic dysfunction — cited as an indicator of greater disease severity and as part of criteria favoring intervention.
+•	Large RV hypertrophy with systolic obliteration → more compression risk and restenosis after stent
+
+
+## Decision...
+Set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.0)
+
+
+
+
+
+
+
+
+
+
+
+# IX. RA DILATION (s_ra_max_diam)
+There is evidence that RA dilaton is associated with increased severity of PS (Visser et al. https://doi.org/10.1016/j.jvc.2019.11.002)
+However, none of the previous studies have looked at survival with right atrial dilation in boxers with PS.  
+
+
+
+## Decision...
+Set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.0)
+
+
+
+
+
+
+
+
+
+
+
+
+# X. RIGHT-SIDED CONGESTIVE HEART FAILURE
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+
+
+## 1. Previous studies for right CHF
+
+
+
+Borgeat et al., J Vet Cardiol 2021 (Transvalvular Stent Angioplasty)
+•	Right sided CHF and erythrocytosis (from shunts) → associated with poorer long term survival.
+
+
+### a. Locatelli
+Did not assess the effect of right CHF
+
+
+
+### a. Using Locatelli
+```{r}
+median_exp_l_chf <- NA
+lower_exp_l_chf <- NA
+upper_exp_l_chf <- NA
+range_l_chf <- upper_exp_l_chf - lower_exp_l_chf
+scale_l_chf <- range_l_chf / 4
+prior_exp_l_chf <- matrix(c(median_exp_l_chf,
+                    range_l_chf,
+                    scale_l_chf)
+)
+colnames(prior_exp_l_chf) <- "locatelli"
+rownames(prior_exp_l_chf) <- c("location", "range", "scale")
+prior_exp_l_chf
+```
+
+
+### b. Using Chetboul 2018
+Journal of Veterinary Cardiology (2018) 20, 405e414
+
+•	Right-sided congestive heart failure (ascites, effusions) — HR = 4.8, p = 0.05. (Associated with shorter time to CD)
+HR 4.8 (95% CI 1.0 to 22.8)
+```{r}
+median_exp_c_chf <- log(4.8)
+lower_exp_c_chf<- log(1.0)
+upper_exp_c_chf <- log(22.8)
+range_c_chf <- upper_exp_c_chf - lower_exp_c_chf
+scale_c_chf <- range_c_chf / 4
+prior_exp_c_chf <- matrix(c(median_exp_c_chf,
+                    range_c_chf,
+                    scale_c_chf)
+)
+colnames(prior_exp_c_chf) <- "chetboul"
+rownames(prior_exp_c_chf) <- c("location", "range", "scale")
+prior_exp_c_chf
+```
+
+
+
+### c.Bonvin (Utrecht Thesis, 2019)
+Did not assess the effect of right CHF
+
+```{r}
+median_exp_b_chf <- NA
+lower_exp_b_chf <- NA
+upper_exp_b_chf <- NA
+range_b_chf <- upper_exp_b_chf - lower_exp_b_chf
+scale_b_chf <- range_b_chf / 4
+prior_exp_b_chf <- matrix(c(median_exp_b_chf,
+                    range_b_chf,
+                    scale_b_chf)
+)
+colnames(prior_exp_b_chf) <- "bonvin"
+rownames(prior_exp_b_chf) <- c("location", "range", "scale")
+prior_exp_b_chf
+```
+
+
+
+
+## 2. Set very weak neutral regularising prior 
+very small datasets (1-3 values) , so prior could impact on the posterior significantly.  Therefore, set scale to 10, make prior virtually flat but not uniform.
+```{r}
+prior_chf <- set_prior("normal(0, 10)", class = "b", coef = "Intercept")
+```
+
+
+
+
+## 3. Create a dataframe for the likelihood based on the Chetboul study
+```{r}
+df_chf <- data.frame(
+  estimate = c(median_exp_l_chf, median_exp_c_chf, median_exp_b_chf), # Observed scales for all studies
+  error = c(scale_l_chf, scale_c_chf, scale_b_chf)      # Observed SD (Standard Error) for all studies
+)
+```
+
+
+
+
+
+## 4. Run model
+```{r}
+set.seed(999)
+model_chf <- brm(estimate | se(error) ~ 0 + Intercept,
+                   family = gaussian(),
+                   data = df_chf,
+                   prior = prior_chf,
+                   control=list(adapt_delta=0.98),
+                   iter = 2000, warmup = 1000,
+                   save_pars = save_pars(all =TRUE),
+                   sample_prior = TRUE)
+```
+
+
+
+## View MCMC trace plots
+```{r}
+color_scheme_set("mix-blue-pink")
+posterior_model_chf <- as.array(model_chf)
+mcmc_trace(posterior_model_chf)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+color_scheme_set("viridis")
+mcmc_rank_overlay(posterior_model_chf) +
+  ylim(0, 100)
+```
+
+
+
+
+## 5. get summary of model
+```{r}
+summary(model_chf)
+```
+
+
+
+
+
+## 6. Get location (median estimate) and scale (SD)
+```{r}
+draws <- as.matrix(model_chf)
+location_chf <- mean(draws[,1]) # draws for type
+scale_chf <- sd(draws[,1])
+location_chf
+scale_chf
+```
+
+
+
+## 7. Compare prior and posterior
+```{r}
+plot(hypothesis(model_chf, "Intercept = 0"))
+```
+
+
+
+## 8. Decision...
+Set an informative prior...
+ ~ student_t(df = 3, location = 1.57583, scale = 0.7705384)
+
+
+### a. Prior for beta of pv_max
+```{r}
+prior_beta_chf <- student_t(df = 3, location = location_chf, scale = scale_chf, autoscale = TRUE)
+```
+
+
+
+
+### b. Suggested scales assuming strong, moderate and weak priors.
+The strong prior is based on the combined estimate from the literature, whilst moderate and weak priors are then scaled up from the strong prior.  These latter priors ensure that the data are not overwhelmed by the prior, but still allow for some regularisation to improve model convergence and reduce overfitting.
+Therefore, strong prior should be 1x the combine scale, then increase this by 2x for moderate and 4x for weak.
+```{r}
+strong_scale <- scale_chf
+moderate_scale <- strong_scale * 2
+weak_scale <- strong_scale * 4
+
+prior_scale_chf <- matrix(c(strong_scale,
+                        moderate_scale,
+                        weak_scale)
+)
+colnames(prior_scale_chf) <- "suggested scale"
+rownames(prior_scale_chf) <- c("strong", "moderate", "weak")
+prior_scale_chf
+```
+
+
+
+### c. Priors bin
+```{r}
+priors_bin_chf <- list(
+  weak = student_t(df = 3, location = location_chf, scale = weak_scale, autoscale = TRUE),
+  moderate = student_t(df = 3, location = location_chf, scale = moderate_scale, autoscale = TRUE),
+  strong = student_t(df = 3, location = location_chf, scale = strong_scale, autoscale = TRUE)
+)
+```
+
+
+
+
+
+
+
+## 9. Plot comparison of study distribution vs. posterior
+### a. Generate posterior for plotting
+```{r}
+# 1. Extract the Posterior and Prior draws
+draws <- model_chf %>%
+  spread_draws(b_Intercept) %>%
+  dplyr::rename(Posterior = b_Intercept) %>%
+  pivot_longer(cols = Posterior, names_to = "Source", values_to = "Value")
+
+# 2. Define the Likelihood parameters (from Locatelli study)
+locatelli_med <- median_exp_l_chf
+locatelli_se   <- scale_l_chf
+
+# 3. Define the Likelihood parameters (from Chetboul study)
+chetboul_med <- median_exp_c_chf
+chetboul_se   <- scale_c_chf
+
+# 4. Define the Likelihood parameters (from Bonvin study)
+bonvin_med <- median_exp_b_chf
+bonvin_se   <- scale_b_chf
+```
+
+
+
+### b. Create the density plot
+```{r}
+# Create the Plot
+ggplot() +
+  # LAYER 1: Posterior (from your HMC draws)
+  geom_density(
+    data = draws, 
+    aes(x = Value), 
+    alpha = 0.7,
+    color = "black",
+    linewidth = 1
+  ) +
+    
+  # LAYER 2: Distribution from Locatelli (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(locatelli_med - 3.92 * locatelli_se, locatelli_med + 3.92 * locatelli_se)), 
+    aes(x = Value, fill = "Locatelli"),
+    fun = dnorm, 
+    args = list(mean = locatelli_med , sd = locatelli_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+
+   # LAYER 3: Distribution from Chetboul (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(chetboul_med - 3.92 * chetboul_se, chetboul_med + 3.92 * chetboul_se)), 
+    aes(x = Value, fill = "Chetboul"),
+    fun = dnorm, 
+    args = list(mean = chetboul_med, sd = chetboul_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) + 
+
+    # LAYER 4: Distribution from Bonvin (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(bonvin_med - 3.96 * bonvin_se, bonvin_med + 3.96 * bonvin_se)), 
+    aes(x = Value, fill = "Bonvin"),
+    fun = dnorm, 
+    args = list(mean = bonvin_med, sd = bonvin_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +  
+  
+   # Styling the Colors
+  scale_fill_manual(
+    values = c(
+      "Locatelli" = "#F8766D",
+      "Chetboul" = "#619CFF",
+      "Bonvin" = "#00BA38"
+    )
+  ) +
+  labs(
+    title = "Informed prior for effect of right CHF on survival",
+    x = "Effect Estimate",
+    y = "Density",
+    fill = "Component"
+  ) +
+  theme_bw() +
+  theme(legend.position = c(0.9, 0.8)) +
+  labs(fill = "Study") +
+
+           theme(axis.title.y = element_text(size=12, face="bold"), 
+               axis.title.x = element_text(size=12, face="bold"),
+               plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+               plot.subtitle = element_text(size = 12, hjust = 0.5, face = "italic"),
+               axis.text.x = element_text(color = "grey50", size = 10),
+               axis.text.y = element_text(color = "grey50",size = 10)) +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+
+
+
+
+
+# XI. ARRHYTHMIAS
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+
+## Decision...
+No prior information on the effect of arrhythmias.
+Therefore, set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.5)
+
+
+
+
+
+
+
+
+
+
+# XII. ATENOLOL
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+
+
+## 1. Previous studies for atenolol
+
+### a. Locatelli
+Did not assess the effect of atenolol
+
+```{r}
+median_exp_l_atenolol <- NA
+lower_exp_l_atenolol <- NA
+upper_exp_l_atenolol <- NA
+range_l_atenolol <- upper_exp_l_atenolol - lower_exp_l_atenolol
+scale_l_atenolol <- range_l_atenolol / 4
+prior_exp_l_atenolol <- matrix(c(median_exp_l_atenolol,
+                    range_l_atenolol,
+                    scale_l_atenolol)
+)
+colnames(prior_exp_l_atenolol) <- "locatelli"
+rownames(prior_exp_l_atenolol) <- c("location", "range", "scale")
+prior_exp_l_atenolol
+```
+
+
+
+
+### c. Chetboul 2018
+Did not assess the effect of atenolol
+
+```{r}
+median_exp_c_atenolol <- NA
+lower_exp_c_atenolol<-NA
+upper_exp_c_atenolol <- NA
+range_c_atenolol <- upper_exp_c_atenolol - lower_exp_c_atenolol
+scale_c_atenolol <- range_c_atenolol / 4
+prior_exp_c_atenolol <- matrix(c(median_exp_c_atenolol,
+                    range_c_atenolol,
+                    scale_c_atenolol)
+)
+colnames(prior_exp_c_atenolol) <- "chetboul"
+rownames(prior_exp_c_atenolol) <- c("location", "range", "scale")
+prior_exp_c_atenolol
+```
+
+
+
+
+### c.Bonvin (Utrecht Thesis, 2019)
+•	Atenolol therapy: paradoxically associated with shorter survival in PBV dogs
+6.349 (1.198-33.641)
+```{r}
+median_exp_b_atenolol <- log(6.349)
+lower_exp_b_atenolol<- log(1.198)
+upper_exp_b_atenolol <- log(33.641)
+range_b_atenolol <- upper_exp_b_atenolol - lower_exp_b_atenolol
+scale_b_atenolol <- range_b_atenolol / 4
+prior_exp_b_atenolol <- matrix(c(median_exp_b_atenolol,
+                    range_b_atenolol,
+                    scale_b_atenolol)
+)
+colnames(prior_exp_b_atenolol) <- "bonvin"
+rownames(prior_exp_b_atenolol) <- c("location", "range", "scale")
+prior_exp_b_atenolol
+```
+
+
+
+
+
+## 2. Set very weak neutral regularising prior 
+very small datasets (1-3 values) , so prior could impact on the posterior significantly.  Therefore, set scale to 10, make prior virtually flat but not uniform.
+```{r}
+prior_atenolol <- set_prior("normal(0, 10)", class = "b", coef = "Intercept")
+```
+
+
+
+
+## 3. Create a dataframe for the likelihood based on the Chetboul study
+```{r}
+df_atenolol <- data.frame(
+  estimate = c(median_exp_l_atenolol, median_exp_c_atenolol, median_exp_b_atenolol), # Observed scales for all studies
+  error = c(scale_l_atenolol, scale_c_atenolol, scale_b_atenolol)      # Observed SD (Standard Error) for all studies
+)
+```
+
+
+
+
+
+## 4. Run model
+```{r}
+set.seed(999)
+model_atenolol <- brm(estimate | se(error) ~ 0 + Intercept,
+                   family = gaussian(),
+                   data = df_atenolol,
+                   prior = prior_atenolol,
+                   control=list(adapt_delta=0.98),
+                   iter = 2000, warmup = 1000,
+                   save_pars = save_pars(all =TRUE),
+                   sample_prior = TRUE)
+```
+
+
+
+## View MCMC trace plots
+```{r}
+color_scheme_set("mix-blue-pink")
+posterior_model_atenolol <- as.array(model_atenolol)
+mcmc_trace(posterior_model_atenolol)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+color_scheme_set("viridis")
+mcmc_rank_overlay(posterior_model_atenolol) +
+  ylim(0, 100)
+```
+
+
+
+
+## 5. get summary of model
+```{r}
+summary(model_atenolol)
+```
+
+
+
+
+
+## 6. Get location (median estimate) and scale (SD)
+```{r}
+draws <- as.matrix(model_atenolol)
+location_atenolol <- mean(draws[,1]) # draws for type
+scale_atenolol <- sd(draws[,1])
+location_atenolol
+scale_atenolol
+```
+
+
+
+## 7. Compare prior and posterior
+```{r}
+plot(hypothesis(model_atenolol, "Intercept = 0"))
+```
+
+
+
+## 8. Decision...
+Set an informative prior...
+ ~ student_t(df = 3, location = 1.866284, scale = 0.8443848)
+
+
+### a. Prior for beta of pv_max
+```{r}
+prior_beta_atenolol <- student_t(df = 3, location = location_atenolol, scale = scale_atenolol, autoscale = TRUE)
+```
+
+
+
+
+### b. Suggested scales assuming strong, moderate and weak priors.
+The strong prior is based on the combined estimate from the literature, whilst moderate and weak priors are then scaled up from the strong prior.  These latter priors ensure that the data are not overwhelmed by the prior, but still allow for some regularisation to improve model convergence and reduce overfitting.
+Therefore, strong prior should be 1x the combine scale, then increase this by 2x for moderate and 4x for weak.
+```{r}
+strong_scale <- scale_atenolol
+moderate_scale <- strong_scale * 2
+weak_scale <- strong_scale * 4
+
+prior_scale_atenolol <- matrix(c(strong_scale,
+                        moderate_scale,
+                        weak_scale)
+)
+colnames(prior_scale_atenolol) <- "suggested scale"
+rownames(prior_scale_atenolol) <- c("strong", "moderate", "weak")
+prior_scale_atenolol
+```
+
+
+
+### c. Priors bin
+```{r}
+priors_bin_atenolol <- list(
+  weak = student_t(df = 3, location = location_atenolol, scale = weak_scale, autoscale = TRUE),
+  moderate = student_t(df = 3, location = location_atenolol, scale = moderate_scale, autoscale = TRUE),
+  strong = student_t(df = 3, location = location_atenolol, scale = strong_scale, autoscale = TRUE)
+)
+```
+
+
+
+
+
+
+
+## 9. Plot comparison of study distribution vs. posterior
+### a. Generate posterior for plotting
+```{r}
+# 1. Extract the Posterior and Prior draws
+draws <- model_atenolol %>%
+  spread_draws(b_Intercept) %>%
+  dplyr::rename(Posterior = b_Intercept) %>%
+  pivot_longer(cols = Posterior, names_to = "Source", values_to = "Value")
+
+# 2. Define the Likelihood parameters (from Locatelli study)
+locatelli_med <- median_exp_l_atenolol
+locatelli_se   <- scale_l_atenolol
+
+# 3. Define the Likelihood parameters (from Chetboul study)
+chetboul_med <- median_exp_c_atenolol
+chetboul_se   <- scale_c_atenolol
+
+# 4. Define the Likelihood parameters (from Bonvin study)
+bonvin_med <- median_exp_b_atenolol
+bonvin_se   <- scale_b_atenolol
+```
+
+
+
+### b. Create the density plot
+```{r}
+# Create the Plot
+ggplot() +
+  # LAYER 1: Posterior (from your HMC draws)
+  geom_density(
+    data = draws, 
+    aes(x = Value), 
+    alpha = 0.7,
+    color = "black",
+    linewidth = 1
+  ) +
+    
+  # LAYER 2: Distribution from Locatelli (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(locatelli_med - 3.92 * locatelli_se, locatelli_med + 3.92 * locatelli_se)), 
+    aes(x = Value, fill = "Locatelli"),
+    fun = dnorm, 
+    args = list(mean = locatelli_med , sd = locatelli_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+
+   # LAYER 3: Distribution from Chetboul (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(chetboul_med - 3.92 * chetboul_se, chetboul_med + 3.92 * chetboul_se)), 
+    aes(x = Value, fill = "Chetboul"),
+    fun = dnorm, 
+    args = list(mean = chetboul_med, sd = chetboul_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) + 
+
+    # LAYER 4: Distribution from Bonvin (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(bonvin_med - 3.96 * bonvin_se, bonvin_med + 3.96 * bonvin_se)), 
+    aes(x = Value, fill = "Bonvin"),
+    fun = dnorm, 
+    args = list(mean = bonvin_med, sd = bonvin_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +  
+  
+   # Styling the Colors
+  scale_fill_manual(
+    values = c(
+      "Locatelli" = "#F8766D",
+      "Chetboul" = "#619CFF",
+      "Bonvin" = "#00BA38"
+    )
+  ) +
+  labs(
+    title = "Informed prior for effect of atenolol on survival",
+    x = "Effect Estimate",
+    y = "Density",
+    fill = "Component"
+  ) +
+  theme_bw() +
+  theme(legend.position = c(0.9, 0.8)) +
+  labs(fill = "Study") +
+
+           theme(axis.title.y = element_text(size=12, face="bold"), 
+               axis.title.x = element_text(size=12, face="bold"),
+               plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+               plot.subtitle = element_text(size = 12, hjust = 0.5, face = "italic"),
+               axis.text.x = element_text(color = "grey50", size = 10),
+               axis.text.y = element_text(color = "grey50",size = 10)) +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+```
+
+
+
+
+
+
+
+
+# XIII. PROCEDURE TYPE
+Coded as...
+•	Balloon
+•	Stent
+
+
+## Decision...
+No prior information on the effect of procedure type.
+Therefore, set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.5)
+
+
+
+
+
+
+
+
+
+# XIV. COMPLICATIONS
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+
+## Decision...
+No prior information on the effect of complications.
+Therefore, set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.5)
+
+
+
+
+
+
+
+
+
+# XV. CONCURRENT CONGENITAL
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+Scansen, Advances in the Treatment of Pulmonary Valve Stenosis
+•	Coronary artery anomalies (e.g., aberrant coronary that courses near annulus) — increases procedural risk (risk of coronary compression/occlusion during interventions) and therefore influences treatment selection and outcomes for interventional procedures.
+
+Borgeat et al., J Vet Cardiol 2021 (Transvalvular Stent Angioplasty)
+•	Concurrent congenital defects (e.g., tetralogy of Fallot, ASD, VSD, tricuspid dysplasia) → complicate prognosis.
+
+## Decision...
+No prior information on the effect of concurrent congenital diseases.
+Therefore, set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.5)
+
+
+
+
+
+
+
+
+
+
+
+# XVI. TRUCUSPID REGURGITATION (need variable)
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+Chetboul et al., Specific features and survival of French bulldogs
+•	Severe tricuspid regurgitation (color Doppler area ≥ 50% RA) — univariate HR = 7.6 (p = 0.001); after adjustment for age & DP: HR = 5.1, p = 0.02. (Remained an independent predictor of CD).
+
+Locatelli et al., JSAP 2013
+•	High Doppler gradient → increased risk of death in untreated dogs (HR ~1.02 per mmHg).
+
+Bonvin (Utrecht Thesis, 2019)
+•	Tricuspid regurgitation: strong negative prognostic factor (HR ~3.5).
+
+Average of the Chetboul and Bonvin studies...
+```{r}
+(7.6 + 3.5) / 2
+```
+
+
+## Coefficient for HR of 5.55
+```{r}
+log(5.55)
+```
+
+## Decision...
+NOT ASSESSED AS DO NOT HAVE COMPLETE DATA FROM ENOUGH ANIMALS
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# XVII. CLINICAL SIGNS (need variable)
+Coded as...
+•	0 (no)
+•	1 (yes)
+
+
+
+
+## 1. Previous studies for clinical signs
+
+### a. Using Locatelli
+Locatelli et al., JSAP 2013
+•	Clinical signs at presentation (presence vs absent) — HR = 3.44, p < 0.001. (Symptomatic dogs worse prognosis).
+HR 3.44 (1.706 to 6.944) 
+```{r}
+median_exp_l_cs <- log(3.44)
+lower_exp_l_cs <- log(1.706)
+upper_exp_l_cs <- log(6.944)
+range_l_cs <- upper_exp_l_cs - lower_exp_l_cs
+scale_l_cs <- range_l_cs / 4
+prior_exp_l_cs <- matrix(c(median_exp_l_cs,
+                    range_l_cs,
+                    scale_l_cs)
+)
+colnames(prior_exp_l_cs) <- "locatelli"
+rownames(prior_exp_l_cs) <- c("location", "range", "scale")
+prior_exp_l_cs
+```
+
+
+
+### b. Using Chetboul
+Chetboul et al., Specific features and survival of French bulldogs
+•	Clinical signs at presentation (presence vs absent) — HR = 3.7, p = 0.03. (Symptomatic dogs worse prognosis).
+3.7 (95% confidence interval 1.1 to 12.1)
+```{r}
+median_exp_c_cs <- log(3.7)
+lower_exp_c_cs<- log(1.1)
+upper_exp_c_cs <- log(12.1)
+range_c_cs <- upper_exp_c_cs - lower_exp_c_cs
+scale_c_cs <- range_c_cs / 4
+prior_exp_c_cs <- matrix(c(median_exp_c_cs,
+                    range_c_cs,
+                    scale_c_cs)
+)
+colnames(prior_exp_c_cs) <- "chetboul"
+rownames(prior_exp_c_cs) <- c("location", "range", "scale")
+prior_exp_c_cs
+```
+
+
+
+### c. Using Bonvin
+Bonvin et al
+•	Clinical signs aassociated with a poorer outcome HR 2.546 (1.053 to 6.156)
+```{r}
+median_exp_b_cs <- log(2.546)
+lower_exp_b_cs <- log(1.053)
+upper_exp_b_cs <- log(6.156)
+range_b_cs <- upper_exp_b_cs - lower_exp_b_cs
+scale_b_cs <- range_b_cs / 4
+prior_exp_b_cs <- matrix(c(median_exp_b_cs,
+                    range_b_cs,
+                    scale_b_cs)
+)
+colnames(prior_exp_b_cs) <- "bonvin"
+rownames(prior_exp_b_cs) <- c("location", "range", "scale")
+prior_exp_b_cs
+```
+
+
+
+
+
+
+
+## 2. Set very weak neutral regularising prior 
+very small datasets (1-3 values) , so prior could impact on the posterior significantly.  Therefore, set scale to 10, make prior virtually flat but not uniform.
+```{r}
+prior_cs <- set_prior("normal(0, 10)", class = "b", coef = "Intercept")
+```
+
+
+
+
+## 3. Create a dataframe for the likelihood based on the Chetboul study
+```{r}
+df_cs <- data.frame(
+  estimate = c(median_exp_l_cs, median_exp_c_cs, median_exp_b_cs), # Observed scales for all studies
+  error = c(scale_l_cs, scale_c_cs, scale_b_cs)      # Observed SD (Standard Error) for all studies
+)
+```
+
+location 1.2354715
+range    1.4037265
+scale    0.3509316
+
+location 1.3083328
+range    2.3978953
+scale    0.5994738
+
+location 0.9345235
+range    1.7657840
+scale    0.4414460
+
+
+
+## 4. Run model
+```{r}
+set.seed(999)
+model_cs <- brm(estimate | se(error) ~ 0 + Intercept,
+                   family = gaussian(),
+                   data = df_cs,
+                   prior = prior_cs,
+                   control=list(adapt_delta=0.98),
+                   iter = 2000, warmup = 1000,
+                   save_pars = save_pars(all =TRUE),
+                   sample_prior = TRUE)
+```
+
+
+
+
+
+## View MCMC trace plots
+```{r}
+color_scheme_set("mix-blue-pink")
+posterior_model_cs <- as.array(model_cs)
+mcmc_trace(posterior_model_cs)
+```
+
+
+
+### b. Trace rank plot
+```{r}
+color_scheme_set("viridis")
+mcmc_rank_overlay(posterior_model_cs) +
+  ylim(0, 100)
+```
+
+
+
+
+## 5. get summary of model
+```{r}
+summary(model_cs)
+```
+
+
+
+
+
+## 6. Get location (median estimate) and scale (SD)
+```{r}
+draws <- as.matrix(model_cs)
+location_cs <- mean(draws[,1]) # draws for type
+scale_cs <- sd(draws[,1])
+location_cs
+scale_cs
+```
+
+
+
+
+
+
+
+## 7. Compare prior and posterior
+```{r}
+plot(hypothesis(model_cs, "Intercept = 0"))
+```
+
+
+
+
+## 8. Decision...
+Set an informative prior...
+ ~ student_t(df = 3, location = 1.150538, scale = 0.2454828)
+
+
+
+### a. Prior for beta of clinical_signs
+```{r}
+prior_beta_cs <- student_t(df = 3, location = location_cs, scale = scale_cs, autoscale = TRUE)
+```
+
+
+
+
+### b. Suggested scales assuming strong, moderate and weak priors.
+Given such a small scale, best to adjustThe strong prior is based on the combined estimate from the literature, whilst moderate and weak priors are then scaled up from the strong prior.  These latter priors ensure that the data are not overwhelmed by the prior, but still allow for some regularisation to improve model convergence and reduce overfitting.
+Therefore, strong prior should be 1x the combine scale, then increase this by 2.5x for moderate and 5x for weak.
+```{r}
+strong_scale <- scale_cs
+moderate_scale <- strong_scale * 2
+weak_scale <- strong_scale * 4
+
+prior_scale_cs <- matrix(c(strong_scale,
+                        moderate_scale,
+                        weak_scale)
+)
+colnames(prior_scale_cs) <- "suggested scale"
+rownames(prior_scale_cs) <- c("strong", "moderate", "weak")
+prior_scale_cs
+```
+
+
+
+### c. Priors bin
+```{r}
+priors_bin_cs <- list(
+  weak = student_t(df = 3, location = location_cs, scale = weak_scale, autoscale = TRUE),
+  moderate = student_t(df = 3, location = location_cs, scale = moderate_scale, autoscale = TRUE),
+  strong = student_t(df = 3, location = location_cs, scale = strong_scale, autoscale = TRUE)
+)
+```
+
+
+
+
+
+
+## 9. Plot comparison of study distribution vs. posterior
+### a. Generate posterior for plotting
+```{r}
+# 1. Extract the Posterior and Prior draws
+draws <- model_cs %>%
+  spread_draws(b_Intercept) %>%
+  dplyr::rename(Posterior = b_Intercept) %>%
+  pivot_longer(cols = Posterior, names_to = "Source", values_to = "Value")
+
+# 2. Define the Likelihood parameters (from Locatelli study)
+locatelli_med <- median_exp_l_cs
+locatelli_se   <- scale_l_cs
+
+# 3. Define the Likelihood parameters (from Chetboul study)
+chetboul_med <- median_exp_c_cs
+chetboul_se   <- scale_c_cs 
+
+# 4. Define the Likelihood parameters (from Bonvin study)
+bonvin_med <- median_exp_b_cs
+bonvin_se   <- scale_b_cs
+```
+
+
+
+### b. Create the density plot
+```{r}
+# Create the Plot
+ggplot() +
+  # LAYER 1: Posterior (from your HMC draws)
+  geom_density(
+    data = draws, 
+    aes(x = Value), 
+    alpha = 0.7,
+    color = "black",
+    linewidth = 1
+  ) +
+
+  
+  # LAYER 2: Distribution from Locatelli (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(locatelli_med - 3.96*locatelli_se, locatelli_med + 3.96*locatelli_se)), 
+    aes(x = Value, fill = "Locatelli"),
+    fun = dnorm, 
+    args = list(mean = locatelli_med , sd = locatelli_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +
+
+   # LAYER 3: Distribution from Chetboul (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(chetboul_med - 3.96 * chetboul_se, chetboul_med + 3.96 * chetboul_se)), 
+    aes(x = Value, fill = "Chetboul"),
+    fun = dnorm, 
+    args = list(mean = chetboul_med, sd = chetboul_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) + 
+
+    # LAYER 4: Distribution from Bonvin (Generated mathematically to match the others)
+  # We use stat_function with 'geom = "area"' to create a shaded shape
+  stat_function(
+    data = data.frame(Value = c(bonvin_med - 3.96 * bonvin_se, bonvin_med + 3.96 * bonvin_se)), 
+    aes(x = Value, fill = "Bonvin"),
+    fun = dnorm, 
+    args = list(mean = bonvin_med, sd = bonvin_se),
+    geom = "area",
+    alpha = 0.2,
+    inherit.aes = FALSE
+  ) +  
+  
+    
+  # Styling the Colors
+  scale_fill_manual(
+    values = c(
+      "Locatelli" = "#F8766D",
+      "Chetboul" = "#619CFF",
+      "Bonvin" = "#00BA38"
+    )
+  ) +
+  labs(
+    title = "Informed prior for effect of clinical signs on survival",
+    subtitle = "Visualising how the Posterior reconciles Locatelli, Chetboul and Bonvin",
+    x = "Effect Estimate",
+    y = "Density",
+    fill = "Component"
+  ) +
+  theme_bw() +
+  theme(legend.position = c(0.9, 0.8)) +
+  labs(fill = "Study") +
+
+           theme(axis.title.y = element_text(size=12, face="bold"), 
+               axis.title.x = element_text(size=12, face="bold"),
+               plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+               plot.subtitle = element_text(size = 12, hjust = 0.5, face = "italic"),
+               axis.text.x = element_text(color = "grey50", size = 10),
+               axis.text.y = element_text(color = "grey50",size = 10)) +
+  geom_vline(xintercept = 0, linetype="dotted", 
+                color = "firebrick", linewidth = 1.5)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# XVIII. BALLOON TYPE
+Coded as...
+•	high_pressure
+•	low_pressure
+
+Lytle et al. 2026
+Journal of Veterinary Cardiology (2026) 63, 81—90
+https://doi.org/10.1016/j.jvc.2025.11.002 
+Examined changes after HP vs LP balloon dilation
+Similar changes after treatment, with no difference in systolic pressure between groups (P = 0.9014)
+
+
+## Decision...
+No prior information on the effect of balloon type on survival
+Therefore, set a non-informative weekly regularising prior...
+ ~ student_t(df = 3, location = 0, scale = 2.5)
+
+
+
+
+
+
+
+
+
