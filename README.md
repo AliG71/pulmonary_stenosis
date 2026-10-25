@@ -1,7 +1,7 @@
 # pulmonary_stenosis
 
 
-data, statistical reports and markdown files for hair cortisol paper
+data, statistical reports and markdown files for pulmonic stenosis paper
 
 This GitHub contains the following:
 
