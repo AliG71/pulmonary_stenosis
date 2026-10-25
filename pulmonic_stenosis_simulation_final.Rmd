@@ -539,8 +539,7 @@ head(nd)
 ps <- posterior_survfit(mod_sx,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -554,7 +553,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.95, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -842,8 +840,7 @@ head(nd)
 ps <- posterior_survfit(mod_s_age,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -857,7 +854,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.95, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -1116,8 +1112,7 @@ head(nd)
 ps <- posterior_survfit(mod_chf,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -1131,7 +1126,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.95, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -1430,8 +1424,7 @@ head(nd)
 ps <- posterior_survfit(mod_chf2,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -1445,7 +1438,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.90, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -1728,8 +1720,7 @@ head(nd)
 ps <- posterior_survfit(mod_clin_si_bias,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -1743,7 +1734,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.90, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -2028,8 +2018,7 @@ head(nd)
 ps <- posterior_survfit(mod_clin_si_true,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -2043,7 +2032,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.90, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -2343,8 +2331,7 @@ head(nd)
 ps <- posterior_survfit(mod_chf3,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -2358,7 +2345,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.90, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -2658,8 +2644,7 @@ head(nd)
 ps <- posterior_survfit(mod_clin_si_bias3,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -2673,7 +2658,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.90, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
@@ -3021,8 +3005,7 @@ head(nd)
 ps <- posterior_survfit(mod_clin_si_true3,
   newdata = nd,
   times = 0,
-  extrapolate = TRUE,
-  control = list(edist = 5)) |>
+  extrapolate = TRUE) |>
   suppressWarnings()
 head(ps)
 ```
@@ -3037,7 +3020,6 @@ pps <- plot(ps) +
   aes(colour = factor(id), fill = factor(id)) +
   scale_colour_brewer(palette = "Dark2") +
   scale_fill_brewer(palette = "Dark2") +
-  coord_cartesian(ylim = c(0.975, 1.0)) +
   theme(legend.position = "none") +
   facet_wrap(~ id, labeller = labeller(id = panel_labels))
 print(pps)
